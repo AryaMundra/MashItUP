@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mashup Editor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🎵 Mashup Editor</h1>
+            <p>Create professional mashups with drag-and-drop editing</p>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button id="playBtn" class="btn success">▶ Play Mashup</button>
+            <button id="pauseBtn" class="btn warning">⏸ Pause Mashup</button>
+            <button id="previewBtn" class="btn primary">🎧 Preview Changes</button>
+            <button id="undoBtn" class="btn">↶ Undo</button>
+            <button id="redoBtn" class="btn">↷ Redo</button>
+            <button id="exportBtn" class="btn primary">💾 Export Mashup</button>
+        </div>
+
+        <!-- Timeline Section -->
+        <div class="timeline-section">
+            <div class="timeline-header">
+                <h2>Timeline</h2>
+                <div>
+                    <span id="timelineInfo">0 segments</span>
+                </div>
+            </div>
+            <div id="timeline" class="timeline">
+                <!-- Timeline segments will be added here -->
+            </div>
+        </div>
+        <!-- Add this after the timeline -->
+        <div class="mashup-scrubber">
+            <div class="scrubber-container">
+                <input type="range" id="mashupScrubber" class="mashup-slider" 
+                    min="0" max="100" value="0" step="0.1">
+                <div class="scrubber-labels">
+                    <span class="scrub-current">00:00</span>
+                    <span class="scrub-total">00:00</span>
+                </div>
+            </div>
+            <div class="scrubber-controls">
+                <button class="btn btn-small" onclick="scrubToPosition()">🎯 Jump to Position</button>
+                <button class="btn btn-small" onclick="playFromScrubber()">▶ Play from Here</button>
+            </div>
+        </div>
+
+        <!-- Songs Section -->
+        <div class="songs-section">
+            <div class="songs-header">
+                <h2>Song Library</h2>
+                <button id="refreshBtn" class="btn btn-small">🔄 Refresh</button>
+            </div>
+            <div id="songsGrid" class="songs-grid">
+                <!-- Songs will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Toast -->
+    <div id="statusToast" class="status-toast">
+        <span id="statusMessage"></span>
+    </div>
+
+    <!-- Audio Elements -->
+    <audio id="mashupAudio" style="display: none;"></audio>
+    <audio id="previewAudio" style="display: none;"></audio>
+
+    <script>
+        // Global variables
+        let socket = null;
+        let songs = {{ songs | tojson | safe }};
+        let segments = {{ segments | tojson | safe }};
+        let selectedSegment = null;
+        let totalDuration = 0;
+
+        console.log('Loaded songs:', Object.keys(songs).length);
+        console.log('Loaded segments:', segments.length);
+
+        // Initialize when DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSocketIO();
+            initializeControls();
+            renderSongs();
+            renderTimeline();
+           
+            initializeMashupScrubber();
+            
+            if (Object.keys(songs).length === 0) {
+                showStatus('No songs found. Please make sure you have audio files in the downloaded_music folder.', 'error');
+            }
+        });
+
+        // Socket.IO initialization
+        function initializeSocketIO() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('Connected to server');
+                showStatus('Connected to real-time server', 'success');
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from server');
+                showStatus('Disconnected from server', 'error');
+            });
+        }
+
+        // Initialize controls
+        function initializeControls() {
+            document.getElementById('playBtn').addEventListener('click', playMashup);
+            document.getElementById('pauseBtn').addEventListener('click', pauseMashup); 
+            document.getElementById('previewBtn').addEventListener('click', previewChanges);
+            document.getElementById('undoBtn').addEventListener('click', undoAction);
+            document.getElementById('redoBtn').addEventListener('click', redoAction);
+            document.getElementById('exportBtn').addEventListener('click', exportMashup);
+            document.getElementById('refreshBtn').addEventListener('click', refreshSongs);
+        }
+
+        // Render songs
+        function renderSongs() {
+            const songsGrid = document.getElementById('songsGrid');
+            songsGrid.innerHTML = '';
+
+            if (Object.keys(songs).length === 0) {
+                songsGrid.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No Songs Found</h3>
+                        <p>Please make sure you have audio files in the downloaded_music folder</p>
+                        <button class="btn" onclick="refreshSongs()">🔄 Refresh</button>
+                    </div>
+                `;
+                return;
+            }
+
+            Object.entries(songs).forEach(([songId, songData]) => {
+                const songCard = createSongCard(songId, songData);
+                songsGrid.appendChild(songCard);
+            });
+
+            // Load used segments for each song
+            Object.keys(songs).forEach(songId => {
+                loadUsedSegments(songId);
+            });
+        }
+
+        // Create song card
+        function createSongCard(songId, songData) {
+            const duration = songData.duration / 1000;
+            
+            const card = document.createElement('div');
+            card.className = 'song-card';
+            card.dataset.song = songId;
+            
+            // Create audio element first
+            const audioElement = document.createElement('audio');
+            audioElement.className = 'song-audio';
+            audioElement.dataset.song = songId;
+            audioElement.preload = 'metadata';
+            audioElement.crossOrigin = 'anonymous';
+            
+            // Add multiple source formats
+            const extensions = ['mp3', 'wav', 'm4a'];
+            extensions.forEach(ext => {
+                const source = document.createElement('source');
+                source.src = `/preview-original/${songId}.${ext}`;
+                source.type = `audio/${ext}`;
+                audioElement.appendChild(source);
+            });
+            
+            card.innerHTML = `
+                <div class="song-header">
+                    <div class="song-title">${songId}</div>
+                    <div class="song-duration">${formatTime(duration)}</div>
+                </div>
+                
+                <div class="slider-container">
+                    <input type="range" class="time-slider" 
+                        min="0" max="${duration}" value="0" step="0.1"
+                        data-song="${songId}">
+                    <div class="time-labels">
+                        <span class="start-time">00:00</span>
+                        <span class="current-time">00:00</span>
+                        <span class="end-time">${formatTime(duration)}</span>
+                    </div>
+                </div>
+                
+                <div class="selection-controls">
+                    <div class="input-group">
+                        <label>Start:</label>
+                        <input type="number" class="time-input start-input" 
+                            value="0" step="0.1" min="0" max="${duration}"
+                            data-song="${songId}">
+                        <button class="btn btn-small" onclick="setCurrentTime('${songId}', 'start')">Set</button>
+                    </div>
+                    <div class="input-group">
+                        <label>End:</label>
+                        <input type="number" class="time-input end-input" 
+                            value="30" step="0.1" min="0" max="${duration}"
+                            data-song="${songId}">
+                        <button class="btn btn-small" onclick="setCurrentTime('${songId}', 'end')">Set</button>
+                    </div>
+                </div>
+                
+                <div class="song-actions">
+                    <button class="btn btn-small success" onclick="playSong('${songId}')">🎧 Play</button>
+                    <button class="btn btn-small" onclick="pauseSong('${songId}')">⏸ Pause</button>
+                    <button class="btn btn-small primary" onclick="addToMashup('${songId}')">➕ Add to End</button>
+                    <button class="btn btn-small info" onclick="addAtSpecificPosition('${songId}')">📍 Add at Position</button>
+                    <button class="btn btn-small warning" onclick="replaceSelected('${songId}')">🔄 Replace Selected</button>
+                </div>
+
+                
+                <div class="used-segments" id="usedSegments-${songId}" style="display: none;">
+                    <h4>Used Segments:</h4>
+                    <div class="used-segments-list"></div>
+                </div>
+            `;
+            
+            // Append audio element
+            card.appendChild(audioElement);
+            
+            // Initialize slider with proper audio sync
+            initializeAudioSlider(card, songId, duration);
+            
+            return card;
+        }
+        // Initialize mashup scrubber
+        function initializeMashupScrubber() {
+            const scrubber = document.getElementById('mashupScrubber');
+            const currentLabel = document.querySelector('.scrub-current');
+            const totalLabel = document.querySelector('.scrub-total');
+            
+            let isUserScrubbing = false;
+            
+            // Update scrubber when timeline changes
+            if (totalDuration > 0) {
+                scrubber.max = totalDuration / 1000; // Convert to seconds
+                totalLabel.textContent = formatTime(totalDuration / 1000);
+            }
+            
+            scrubber.addEventListener('mousedown', function() {
+                isUserScrubbing = true;
+            });
+            
+            scrubber.addEventListener('mouseup', function() {
+                isUserScrubbing = false;
+            });
+            
+            scrubber.addEventListener('input', function() {
+                const currentTime = parseFloat(this.value);
+                currentLabel.textContent = formatTime(currentTime);
+                
+                // Update playhead position on timeline
+                if (totalDuration > 0) {
+                    const position = (currentTime * 1000 / totalDuration) * 100;
+                    const playhead = document.getElementById('timelineMarker');
+                    if (playhead) {
+                        playhead.style.left = `${position}%`;
+                    }
+                }
+            });
+            
+            // Update scrubber when audio plays
+            const mashupAudio = document.getElementById('mashupAudio');
+            const previewAudio = document.getElementById('previewAudio');
+            
+            [mashupAudio, previewAudio].forEach(audio => {
+                if (audio) {
+                    audio.addEventListener('timeupdate', function() {
+                        if (!isUserScrubbing) {
+                            scrubber.value = this.currentTime;
+                            currentLabel.textContent = formatTime(this.currentTime);
+                            
+                            // Update timeline playhead
+                            if (totalDuration > 0) {
+                                const position = (this.currentTime * 1000 / totalDuration) * 100;
+                                const playhead = document.getElementById('timelineMarker');
+                                if (playhead) {
+                                    playhead.style.left = `${position}%`;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        function scrubToPosition() {
+            const scrubber = document.getElementById('mashupScrubber');
+            const targetTime = parseFloat(scrubber.value);
+            
+            const mashupAudio = document.getElementById('mashupAudio');
+            const previewAudio = document.getElementById('previewAudio');
+            
+            [mashupAudio, previewAudio].forEach(audio => {
+                if (audio && audio.src) {
+                    audio.currentTime = targetTime;
+                }
+            });
+            
+            showStatus(`Jumped to ${formatTime(targetTime)}`, 'info');
+        }
+
+        function playFromScrubber() {
+            scrubToPosition();
+            playMashup();
+        }
+
+
+
+        function initializeAudioSlider(card, songId, duration) {
+            const slider = card.querySelector('.time-slider');
+            const startInput = card.querySelector('.start-input');
+            const endInput = card.querySelector('.end-input');
+            const currentTimeLabel = card.querySelector('.current-time');
+            const startTimeLabel = card.querySelector('.start-time');
+            const audio = card.querySelector('.song-audio');
+            
+            let isUserSeeking = false;
+            let isPlaying = false;
+            
+            // Audio event listeners
+            audio.addEventListener('loadedmetadata', function() {
+                slider.max = audio.duration;
+                card.querySelector('.end-time').textContent = formatTime(audio.duration);
+                
+                // Set default end time to song duration or 30 seconds
+                const defaultEnd = Math.min(30, audio.duration);
+                endInput.value = defaultEnd;
+            });
+            
+            // Update slider position and time display as audio plays
+            audio.addEventListener('timeupdate', function() {
+                if (!isUserSeeking && isPlaying) {
+                    slider.value = audio.currentTime;
+                    currentTimeLabel.textContent = formatTime(audio.currentTime);
+                    startTimeLabel.textContent = formatTime(audio.currentTime);
+                }
+            });
+            
+            // Handle slider input (user dragging or clicking)
+            slider.addEventListener('mousedown', function() {
+                isUserSeeking = true;
+            });
+            
+            slider.addEventListener('mouseup', function() {
+                isUserSeeking = false;
+                if (audio.duration) {
+                    audio.currentTime = this.value;
+                }
+            });
+            
+            slider.addEventListener('input', function() {
+                const currentTime = parseFloat(this.value);
+                currentTimeLabel.textContent = formatTime(currentTime);
+                startTimeLabel.textContent = formatTime(currentTime);
+                
+                // Update audio position if not playing
+                if (!isPlaying && audio.duration) {
+                    audio.currentTime = currentTime;
+                }
+            });
+            
+            // Handle input changes
+            startInput.addEventListener('change', function() {
+                const startTime = parseFloat(this.value);
+                if (startTime >= 0 && startTime < parseFloat(endInput.value)) {
+                    slider.value = startTime;
+                    if (audio.duration) {
+                        audio.currentTime = startTime;
+                    }
+                    currentTimeLabel.textContent = formatTime(startTime);
+                    startTimeLabel.textContent = formatTime(startTime);
+                }
+            });
+
+            endInput.addEventListener('change', function() {
+                const endTime = parseFloat(this.value);
+                const startTime = parseFloat(startInput.value);
+                if (endTime <= startTime) {
+                    this.value = startTime + 1;
+                    showStatus('End time must be greater than start time', 'error');
+                }
+            });
+            
+            // Track playing state
+            audio.addEventListener('play', function() {
+                isPlaying = true;
+            });
+            
+            audio.addEventListener('pause', function() {
+                isPlaying = false;
+            });
+            
+            audio.addEventListener('ended', function() {
+                isPlaying = false;
+                // Reset play button
+                const playBtn = card.querySelector(`[onclick="playSong('${songId}')"]`);
+                if (playBtn) {
+                    playBtn.textContent = '🎧 Play';
+                }
+            });
+        }
+
+
+        function playSong(songId) {
+            // Pause all other songs first
+            document.querySelectorAll('.song-audio').forEach(audio => {
+                if (audio.dataset.song !== songId) {
+                    audio.pause();
+                }
+            });
+            
+            const audio = document.querySelector(`audio[data-song="${songId}"]`);
+            const playBtn = document.querySelector(`[onclick="playSong('${songId}')"]`);
+            
+            if (audio) {
+                audio.play().then(() => {
+                    playBtn.textContent = '⏸ Playing';
+                    showStatus(`Playing: ${songId}`, 'success');
+                }).catch(error => {
+                    console.error('Playback failed:', error);
+                    showStatus('Playback failed', 'error');
+                });
+            }
+        }
+
+        function pauseSong(songId) {
+            const audio = document.querySelector(`audio[data-song="${songId}"]`);
+            const playBtn = document.querySelector(`[onclick="playSong('${songId}')"]`);
+            
+            if (audio) {
+                audio.pause();
+                playBtn.textContent = '🎧 Play';
+                showStatus(`Paused: ${songId}`, 'info');
+            }
+        }
+
+        function setCurrentTime(songId, type) {
+            const card = document.querySelector(`[data-song="${songId}"]`);
+            const audio = card.querySelector('.song-audio');
+            const slider = card.querySelector('.time-slider');
+            const input = card.querySelector(`.${type}-input`);
+            
+            if (audio && audio.duration) {
+                const currentTime = audio.currentTime;
+                input.value = currentTime.toFixed(1);
+                slider.value = currentTime;
+                showStatus(`${type} time set to ${formatTime(currentTime)}`, 'success');
+            } else {
+                // Fallback to slider value if audio not loaded
+                input.value = slider.value;
+                showStatus(`${type} time set to ${formatTime(parseFloat(slider.value))}`, 'success');
+            }
+        }
+
+
+
+        // Load used segments for a song
+        async function loadUsedSegments(songId) {
+            try {
+                const response = await fetch(`/api/editor/used-segments/${songId}`);
+                const data = await response.json();
+                
+                if (data.used_segments && data.used_segments.length > 0) {
+                    const usedContainer = document.getElementById(`usedSegments-${songId}`);
+                    const listContainer = usedContainer.querySelector('.used-segments-list');
+                    
+                    listContainer.innerHTML = '';
+                    data.used_segments.forEach(segment => {
+                        const segmentDiv = document.createElement('div');
+                        segmentDiv.className = 'used-segment';
+                        segmentDiv.textContent = `${formatTime(segment.start)} - ${formatTime(segment.end)} (${segment.section})`;
+                        listContainer.appendChild(segmentDiv);
+                    });
+                    
+                    usedContainer.style.display = 'block';
+                } else {
+                    const usedContainer = document.getElementById(`usedSegments-${songId}`);
+                    if (usedContainer) {
+                        usedContainer.style.display = 'none';
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load used segments:', error);
+            }
+        }
+
+        // Render timeline
+        function renderTimeline() {
+            const timeline = document.getElementById('timeline');
+            
+            // Clear existing segments
+            const existingSegments = timeline.querySelectorAll('.timeline-segment');
+            existingSegments.forEach(seg => seg.remove());
+            
+            // Calculate total duration
+            totalDuration = Math.max(...segments.map(s => s.mashup_end), 120000); // Min 2 minutes
+            
+            // Render segments
+            segments.forEach((segment, index) => {
+                const segmentElement = createTimelineSegment(segment, index);
+                timeline.appendChild(segmentElement);
+            });
+            
+            // Update timeline info
+            document.getElementById('timelineInfo').textContent = `${segments.length} segments`;
+            
+           
+            
+            // Update scrubber
+            initializeMashupScrubber();
+        }
+        // Create timeline segment
+        function createTimelineSegment(segment, index) {
+            const leftPercent = (segment.mashup_start / totalDuration) * 100;
+            const widthPercent = (segment.duration / totalDuration) * 100;
+
+            const segmentDiv = document.createElement('div');
+            segmentDiv.className = `timeline-segment ${segment.section}`;
+            segmentDiv.dataset.segmentId = segment.id;
+            segmentDiv.dataset.segmentIndex = index;
+            
+            segmentDiv.style.left = `${leftPercent}%`;
+            segmentDiv.style.width = `${Math.max(widthPercent, 5)}%`;
+            
+            segmentDiv.innerHTML = `
+                ${segment.song_id.substring(0, 12)}
+                <button style="position: absolute; top: 2px; right: 2px; background: rgba(255,0,0,0.8); border: none; color: white; border-radius: 50%; width: 16px; height: 16px; font-size: 10px; cursor: pointer;" onclick="deleteSegment('${segment.id}')">×</button>
+            `;
+
+            segmentDiv.addEventListener('click', function() {
+                selectSegment(this);
+            });
+
+            return segmentDiv;
+        }
+
+        // Song actions
+        function setCurrentTime(songId, type) {
+            const card = document.querySelector(`[data-song="${songId}"]`);
+            const slider = card.querySelector('.time-slider');
+            const input = card.querySelector(`.${type}-input`);
+            
+            input.value = slider.value;
+            showStatus(`${type} time set to ${formatTime(parseFloat(slider.value))}`, 'success');
+        }
+
+        async function previewSegment(songId) {
+            const card = document.querySelector(`[data-song="${songId}"]`);
+            const startTime = parseFloat(card.querySelector('.start-input').value);
+            const endTime = parseFloat(card.querySelector('.end-input').value);
+
+            if (endTime <= startTime) {
+                showStatus('End time must be greater than start time', 'error');
+                return;
+            }
+
+            try {
+                showStatus('Generating preview...', 'info');
+                
+                const response = await fetch('/api/editor/preview-segment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    
+                    const audio = document.getElementById('previewAudio');
+                    audio.src = audioUrl;
+                    audio.play();
+                    
+                    showStatus(`Playing preview: ${songId}`, 'success');
+                } else {
+                    showStatus('Failed to generate preview', 'error');
+                }
+            } catch (error) {
+                showStatus('Preview error: ' + error.message, 'error');
+            }
+        }
+        
+
+           
+
+        function showOverlapOptionsModal(segmentId, newPosition, overlappingSegments) {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>Segment Overlap Detected</h3>
+                    <p>The segment will overlap with ${overlappingSegments.length} other segment(s). How would you like to handle this?</p>
+                    
+                    <div class="overlap-options">
+                        <div class="option-card" onclick="selectOverlapOption('${segmentId}', ${newPosition}, 'background')">
+                            <h4>🎵 Background Music</h4>
+                            <p>Play overlapping parts at 20% volume as background music</p>
+                        </div>
+                        <div class="option-card" onclick="selectOverlapOption('${segmentId}', ${newPosition}, 'shift_timeline')">
+                            <h4>⏰ Shift Timeline</h4>
+                            <p>Move subsequent segments to avoid overlap</p>
+                        </div>
+                        <div class="option-card" onclick="selectOverlapOption('${segmentId}', ${newPosition}, 'replace')">
+                            <h4>🔄 Replace</h4>
+                            <p>Replace overlapping segments with this one</p>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-actions">
+                        <button class="btn secondary" onclick="closeOverlapModal()">Cancel</button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+
+        async function selectOverlapOption(segmentId, newPosition, option) {
+            closeOverlapModal();
+            await moveSegmentToPosition(segmentId, newPosition, option);
+        }
+
+     
+
+        function closeOverlapModal() {
+            const modal = document.querySelector('.modal-overlay');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        
+
+        // Update the replaceSelected function
+        async function replaceSelected(songId) {
+            if (!selectedSegment) {
+                showStatus('Please select a segment to replace', 'error');
+                return;
+            }
+
+            const card = document.querySelector(`[data-song="${songId}"]`);
+            const startTime = parseFloat(card.querySelector('.start-input').value);
+            const endTime = parseFloat(card.querySelector('.end-input').value);
+
+            if (endTime <= startTime) {
+                showStatus('End time must be greater than start time', 'error');
+                return;
+            }
+
+            try {
+                // First, get replacement options
+                const optionsResponse = await fetch('/api/editor/replacement-options', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segment_id: selectedSegment.dataset.segmentId,
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime
+                    })
+                });
+
+                const optionsResult = await optionsResponse.json();
+
+                if (optionsResult.success && optionsResult.options.needs_decision) {
+                    // Show replacement options modal
+                    showReplacementOptionsModal(songId, startTime, endTime, optionsResult.options);
+                } else {
+                    // Direct replacement (no significant duration difference)
+                    await performReplacement(songId, startTime, endTime, 'adjust_timeline');
+                }
+            } catch (error) {
+                showStatus('Replace error: ' + error.message, 'error');
+            }
+        }
+
+        function showReplacementOptionsModal(songId, startTime, endTime, options) {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>Segment Replacement Options</h3>
+                    <p>The new segment duration (${options.new_duration.toFixed(1)}s) differs from the original (${options.old_duration.toFixed(1)}s) by ${Math.abs(options.duration_diff).toFixed(1)} seconds.</p>
+                    
+                    <div class="replacement-options">
+                        ${Object.entries(options.options).map(([key, option]) => `
+                            <div class="option-card" data-option="${key}">
+                                <h4>${option.description}</h4>
+                                <p>${option.effect}</p>
+                                <button class="btn btn-small" onclick="selectReplacementOption('${key}', '${songId}', ${startTime}, ${endTime})">
+                                    Choose This Option
+                                </button>
+                            </div>
+                        `).join('')}
+                    </div>
+                    
+                    <div class="modal-actions">
+                        <button class="btn secondary" onclick="closeReplacementModal()">Cancel</button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+
+        async function selectReplacementOption(option, songId, startTime, endTime) {
+            closeReplacementModal();
+            await performReplacement(songId, startTime, endTime, option);
+        }
+
+        async function performReplacement(songId, startTime, endTime, option) {
+            try {
+                showStatus('Replacing segment...', 'info');
+                
+                const response = await fetch('/api/editor/replace-segment-advanced', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segment_id: selectedSegment.dataset.segmentId,
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime,
+                        replacement_option: option
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    
+                    // Update used segments for all songs
+                    Object.keys(songs).forEach(loadUsedSegments);
+                    
+                    showStatus(result.message, 'success');
+                } else {
+                    showStatus('Failed to replace segment: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Replace error: ' + error.message, 'error');
+            }
+        }
+
+        function closeReplacementModal() {
+            const modal = document.querySelector('.modal-overlay');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+
+        // Timeline actions
+        function selectSegment(segmentElement) {
+            // Remove previous selection
+            document.querySelectorAll('.timeline-segment.selected').forEach(s => {
+                s.classList.remove('selected');
+            });
+            
+            // Add new selection
+            segmentElement.classList.add('selected');
+            selectedSegment = segmentElement;
+            
+            showStatus(`Selected segment: ${segmentElement.textContent.trim()}`, 'info');
+        }
+
+        // Enhanced delete function with timeline adjustment option
+        async function deleteSegment(segmentId) {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>Delete Segment</h3>
+                    <p>How would you like to handle the timeline after deleting this segment?</p>
+                    
+                    <div class="delete-options">
+                        <div class="option-card" onclick="confirmDelete('${segmentId}', true)">
+                            <h4>🔧 Adjust Timeline</h4>
+                            <p>Move all subsequent segments forward to fill the gap (recommended)</p>
+                        </div>
+                        <div class="option-card" onclick="confirmDelete('${segmentId}', false)">
+                            <h4>⏰ Keep Timeline</h4>
+                            <p>Leave a gap in the timeline where this segment was</p>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-actions">
+                        <button class="btn secondary" onclick="closeDeleteModal()">Cancel</button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+
+        async function confirmDelete(segmentId, adjustTimeline) {
+            closeDeleteModal();
+            
+            try {
+                showStatus('Deleting segment...', 'info');
+                
+                const response = await fetch('/api/editor/delete-segment-advanced', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        segment_id: segmentId,
+                        adjust_timeline: adjustTimeline
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    
+                    // Update used segments for all songs
+                    Object.keys(songs).forEach(loadUsedSegments);
+                    
+                    selectedSegment = null;
+                    const message = adjustTimeline ? 
+                        `Segment deleted and timeline adjusted (saved ${result.deleted_duration.toFixed(1)}s)` :
+                        `Segment deleted (${result.deleted_duration.toFixed(1)}s gap left in timeline)`;
+                    showStatus(message, 'success');
+                } else {
+                    showStatus('Failed to delete segment: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Delete error: ' + error.message, 'error');
+            }
+        }
+
+        function closeDeleteModal() {
+            const modal = document.querySelector('.modal-overlay');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        // Enhanced add to mashup with position selection
+        // Update the addToMashup function
+        // Simple add to end of mashup
+        async function addToMashup(songId) {
+            const card = document.querySelector(`[data-song="${songId}"]`);
+            const startTime = parseFloat(card.querySelector('.start-input').value);
+            const endTime = parseFloat(card.querySelector('.end-input').value);
+
+            if (endTime <= startTime) {
+                showStatus('End time must be greater than start time', 'error');
+                return;
+            }
+
+            try {
+                showStatus('Adding to end of mashup...', 'info');
+                
+                const response = await fetch('/api/editor/add-segment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime,
+                        section: 'body'
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    loadUsedSegments(songId);
+                    showStatus(`Added ${songId} to end of mashup`, 'success');
+                } else {
+                    showStatus('Failed to add segment: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Add error: ' + error.message, 'error');
+            }
+        }
+
+        // Add with position selection (for advanced users)
+        async function addAtSpecificPosition(songId) {
+            const card = document.querySelector(`[data-song="${songId}"]`);
+            const startTime = parseFloat(card.querySelector('.start-input').value);
+            const endTime = parseFloat(card.querySelector('.end-input').value);
+
+            if (endTime <= startTime) {
+                showStatus('End time must be greater than start time', 'error');
+                return;
+            }
+
+            // Get available timeline positions
+            try {
+                const response = await fetch('/api/editor/timeline-positions');
+                const result = await response.json();
+                
+                if (result.positions && result.positions.length > 1) {
+                    showPositionSelectionModal(songId, startTime, endTime, result.positions);
+                } else {
+                    // No existing segments, add at beginning
+                    await addSegmentAtPositionWithShiftCheck(songId, startTime, endTime, 0);
+                }
+            } catch (error) {
+                showStatus('Error getting timeline positions: ' + error.message, 'error');
+            }
+        }
+
+        // Keep the existing position selection functions but simplify them
+        async function addSegmentAtPositionWithShiftCheck(songId, startTime, endTime, positionMs) {
+            try {
+                // Check if timeline shift is needed
+                const shiftCheckResponse = await fetch('/api/editor/check-timeline-shift', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ position_ms: positionMs })
+                });
+                
+                const shiftResult = await shiftCheckResponse.json();
+                
+                if (shiftResult.needs_shift) {
+                    // Show simple choice: shift or overlay
+                    showSimpleShiftModal(songId, startTime, endTime, positionMs);
+                } else {
+                    // No shift needed, add directly
+                    await addSegmentWithShiftOption(songId, startTime, endTime, positionMs, true);
+                }
+            } catch (error) {
+                showStatus('Error: ' + error.message, 'error');
+            }
+        }
+
+        function showSimpleShiftModal(songId, startTime, endTime, positionMs) {
+            const duration = endTime - startTime;
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>How to Add This Segment?</h3>
+                    <p>There are existing segments after this position. Choose how to add your ${duration.toFixed(1)}s segment:</p>
+                    
+                    <div class="simple-options">
+                        <button class="btn success" onclick="selectSimpleOption('${songId}', ${startTime}, ${endTime}, ${positionMs}, true)">
+                            ⏰ Shift Timeline<br>
+                            <small>Move other segments to make space (recommended)</small>
+                        </button>
+                        <button class="btn warning" onclick="selectSimpleOption('${songId}', ${startTime}, ${endTime}, ${positionMs}, false)">
+                            🎵 Play Over<br>
+                            <small>Play as background music</small>
+                        </button>
+                    </div>
+                    
+                    <button class="btn secondary" onclick="closeModal()" style="margin-top: 15px;">Cancel</button>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+
+        async function selectSimpleOption(songId, startTime, endTime, positionMs, shiftTimeline) {
+            closeModal();
+            await addSegmentWithShiftOption(songId, startTime, endTime, positionMs, shiftTimeline);
+        }
+
+        function closeModal() {
+            const modal = document.querySelector('.modal-overlay');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+
+        // Update selectPosition function
+        async function selectPosition(songId, startTime, endTime, positionMs) {
+            closePositionModal();
+            await addSegmentAtPositionWithShiftCheck(songId, startTime, endTime, positionMs);
+        }
+
+        // New function to check and handle timeline shifting
+        
+
+        async function selectShiftOption(songId, startTime, endTime, positionMs, shiftTimeline) {
+            closeShiftModal();
+            await addSegmentWithShiftOption(songId, startTime, endTime, positionMs, shiftTimeline);
+        }
+
+        async function addSegmentWithShiftOption(songId, startTime, endTime, positionMs, shiftTimeline) {
+            try {
+                showStatus('Adding segment to timeline...', 'info');
+                
+                const response = await fetch('/api/editor/add-segment-with-shift-option', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime,
+                        position_ms: positionMs,
+                        section: 'body',
+                        shift_timeline: shiftTimeline
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    loadUsedSegments(songId);
+                    
+                    const message = result.timeline_shifted ? 
+                        `Added ${songId} and shifted timeline` : 
+                        `Added ${songId} at ${(positionMs/1000).toFixed(1)}s`;
+                    showStatus(message, 'success');
+                } else {
+                    showStatus('Failed to add segment: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Add error: ' + error.message, 'error');
+            }
+        }
+
+      
+
+
+        function showPositionSelectionModal(songId, startTime, endTime, positions) {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>Choose Position for New Segment</h3>
+                    <p>Where would you like to add "${songId}" (${(endTime - startTime).toFixed(1)}s)?</p>
+                    
+                    <div class="position-options">
+                        ${positions.map(pos => `
+                            <div class="option-card" onclick="selectPosition('${songId}', ${startTime}, ${endTime}, ${pos.position_ms})">
+                                <h4>📍 ${pos.description}</h4>
+                                <p>At ${pos.position_seconds.toFixed(1)}s in timeline</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                    
+                    <div class="modal-actions">
+                        <button class="btn secondary" onclick="closePositionModal()">Cancel</button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+        }
+
+        async function selectPosition(songId, startTime, endTime, positionMs) {
+            closePositionModal();
+            await addSegmentAtPosition(songId, startTime, endTime, positionMs);
+        }
+
+        async function addSegmentAtPosition(songId, startTime, endTime, positionMs) {
+            try {
+                showStatus('Adding segment to timeline...', 'info');
+                
+                const response = await fetch('/api/editor/add-segment-at-position', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime,
+                        position_ms: positionMs,
+                        section: 'body'
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    loadUsedSegments(songId);
+                    showStatus(`Added ${songId} at ${(positionMs/1000).toFixed(1)}s`, 'success');
+                } else {
+                    showStatus('Failed to add segment: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Add error: ' + error.message, 'error');
+            }
+        }
+
+        function closePositionModal() {
+            const modal = document.querySelector('.modal-overlay');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+
+        // Control actions
+        async function playMashup() {
+            try {
+                showStatus('Loading mashup...', 'info');
+                
+                const response = await fetch('/api/editor/preview-mashup');
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    
+                    const audio = document.getElementById('mashupAudio');
+                    audio.src = audioUrl;
+                    audio.play();
+                    
+                    showStatus('Playing mashup', 'success');
+                } else {
+                    showStatus('Failed to load mashup', 'error');
+                }
+            } catch (error) {
+                showStatus('Playback error: ' + error.message, 'error');
+            }
+        }
+
+        function pauseMashup() {
+            const audio = document.getElementById('mashupAudio');
+            const previewAudio = document.getElementById('previewAudio');
+            
+            // Pause both mashup and preview audio
+            if (audio && !audio.paused) {
+                audio.pause();
+                showStatus('Mashup playback paused', 'info');
+            }
+            
+            if (previewAudio && !previewAudio.paused) {
+                previewAudio.pause();
+                showStatus('Preview playback paused', 'info');
+            }
+            
+            // Update play button text if needed
+            const playBtn = document.getElementById('playBtn');
+            if (playBtn) {
+                playBtn.innerHTML = '▶ Play Mashup';
+            }
+        }
+
+        async function previewChanges() {
+            try {
+                showStatus('Generating preview...', 'info');
+                
+                const response = await fetch('/api/editor/preview-mashup');
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    
+                    const audio = document.getElementById('previewAudio');
+                    audio.src = audioUrl;
+                    audio.play();
+                    
+                    showStatus('Playing preview', 'success');
+                } else {
+                    showStatus('Failed to generate preview', 'error');
+                }
+            } catch (error) {
+                showStatus('Preview error: ' + error.message, 'error');
+            }
+        }
+
+        async function undoAction() {
+            try {
+                showStatus('Undoing...', 'info');
+                
+                const response = await fetch('/api/editor/undo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    
+                    // Update used segments for all songs
+                    Object.keys(songs).forEach(loadUsedSegments);
+                    
+                    showStatus(`Undo: ${result.message}`, 'success');
+                } else {
+                    showStatus(result.message, 'info');
+                }
+            } catch (error) {
+                showStatus('Undo error: ' + error.message, 'error');
+            }
+        }
+
+        async function redoAction() {
+            try {
+                showStatus('Redoing...', 'info');
+                
+                const response = await fetch('/api/editor/redo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    
+                    // Update used segments for all songs
+                    Object.keys(songs).forEach(loadUsedSegments);
+                    
+                    showStatus(`Redo: ${result.message}`, 'success');
+                } else {
+                    showStatus(result.message, 'info');
+                }
+            } catch (error) {
+                showStatus('Redo error: ' + error.message, 'error');
+            }
+        }
+
+        async function exportMashup() {
+            try {
+                showStatus('Exporting mashup...', 'info');
+                
+                const response = await fetch('/api/editor/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showStatus('Mashup exported successfully!', 'success');
+                    
+                    // Create download link
+                    const link = document.createElement('a');
+                    link.href = result.download_url;
+                    link.download = result.filename;
+                    link.click();
+                } else {
+                    showStatus('Export failed: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Export error: ' + error.message, 'error');
+            }
+        }
+
+        async function refreshSongs() {
+            try {
+                showStatus('Refreshing songs...', 'info');
+                
+                const response = await fetch('/api/editor/songs');
+                const result = await response.json();
+
+                if (result.songs) {
+                    songs = result.songs;
+                    renderSongs();
+                    showStatus(`Loaded ${Object.keys(songs).length} songs`, 'success');
+                } else {
+                    showStatus('Failed to refresh songs', 'error');
+                }
+            } catch (error) {
+                showStatus('Refresh error: ' + error.message, 'error');
+            }
+        }
+
+        // Utility functions
+        function formatTime(seconds) {
+            if (isNaN(seconds)) return '00:00';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function showStatus(message, type = 'info') {
+            const toast = document.getElementById('statusToast');
+            const messageEl = document.getElementById('statusMessage');
+            
+            messageEl.textContent = message;
+            toast.className = `status-toast ${type} show`;
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+            
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            fetch('/api/cleanup', { method: 'POST' });
+        });
+
+        // Auto-save functionality (future enhancement)
+        let autoSaveTimer = null;
+        
+        function scheduleAutoSave() {
+            if (autoSaveTimer) {
+                clearTimeout(autoSaveTimer);
+            }
+            
+            autoSaveTimer = setTimeout(() => {
+                // Auto-save logic here
+                console.log('Auto-saving...');
+            }, 30000); // Auto-save every 30 seconds
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            // Prevent shortcuts when typing in inputs
+            if (e.target.tagName === 'INPUT') return;
+            
+            switch(e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    playMashup();
+                    break;
+                case 'KeyP':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        previewChanges();
+                    }
+                    break;
+                case 'KeyZ':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            redoAction();
+                        } else {
+                            undoAction();
+                        }
+                    }
+                    break;
+                case 'KeyS':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        exportMashup();
+                    }
+                    break;
+                case 'Delete':
+                case 'Backspace':
+                    if (selectedSegment) {
+                        e.preventDefault();
+                        deleteSegment(selectedSegment.dataset.segmentId);
+                    }
+                    break;
+            }
+        });
+
+        // Initialize additional features when ready
+        setTimeout(() => {
+            initializeDragDrop();
+            makeSongsDraggable();
+        }, 1000);
+
+        console.log('Mashup Editor fully loaded and ready!');
+    </script>
+</body>
+</html>

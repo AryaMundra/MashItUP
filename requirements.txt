@@ -1,0 +1,47 @@
+# Core Audio Processing
+librosa
+soundfile>=0.12.1
+numpy>=1.24.0
+scipy>=1.10.0
+matplotlib
+pydub
+pyaudio
+
+
+# Async Processing
+nest-asyncio
+asyncio
+
+
+
+# Data Handling
+dataclasses
+typing-extensions>=4.5.0
+dotenv
+python-dotenv
+
+
+# For web app
+Flask
+# for editor page
+flask_socketio
+eventlet
+
+
+
+# Audio Format Support
+ffmpeg-python>=0.2.0
+
+# Performance Optimization
+numba>=0.57.0
+
+# For spotify deployment
+spotipy
+
+# dependencies for Render
+wheel
+setuptools
+
+
+# INstall freyr ( npm install -g freyr)
+#Install atomicparsley ( choco install atomicparsley)

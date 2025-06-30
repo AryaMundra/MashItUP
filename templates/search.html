@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Songs - MashupMaker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🎵 Find Your Music</h1>
+            <p>Search and select songs to create your perfect mashup</p>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav">
+            <ul>
+                <li><a href="{{ url_for('index') }}">Home</a></li>
+                <li><a href="{{ url_for('search') }}" class="active">Create Mashup</a></li>
+                <li><a href="{{ url_for('results') }}">My Mashups</a></li>
+            </ul>
+        </nav>
+
+        <!-- Search Section -->
+        <div class="search-container">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Search for Songs</h2>
+                    <div class="card-subtitle">Find tracks to include in your mashup</div>
+                </div>
+                
+                <div class="search-box">
+                    <input type="text" id="searchInput" class="search-input" 
+                           placeholder="Search for songs, artists, or albums..." 
+                           autocomplete="off">
+                    <button id="searchBtn" class="search-btn">
+                        🔍
+                    </button>
+                </div>
+                
+                <div id="searchStatus" class="search-status" style="display: none;">
+                    <span id="statusMessage"></span>
+                </div>
+            </div>
+
+            <!-- Selected Songs Section -->
+            <div class="card" id="selectedSection" style="display: none;">
+                <div class="card-header">
+                    <h3 class="card-title">Selected Songs (<span id="selectedCount">0</span>)</h3>
+                    <div class="card-subtitle">Choose 2 or more songs to create a mashup</div>
+                </div>
+                
+                <div id="selectedSongs" class="selected-songs-grid">
+                    <!-- Selected songs will appear here -->
+                </div>
+                
+                <div class="create-actions">
+                    <button id="clearAllBtn" class="btn secondary">
+                        🗑️ Clear All
+                    </button>
+                    <button id="createMashupBtn" class="btn primary btn-large" disabled>
+                        🎤 Create Mashup (<span id="createCount">0</span> songs)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Search Results -->
+            <div class="card" id="resultsSection" style="display: none;">
+                <div class="card-header">
+                    <h3 class="card-title">Search Results</h3>
+                    <div class="card-subtitle">Click on songs to add them to your mashup</div>
+                </div>
+                
+                <div id="searchResults" class="search-results">
+                    <!-- Search results will appear here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+            <div class="loading-content">
+                <div class="spinner"></div>
+                <h3>Creating Your Mashup...</h3>
+                <p id="loadingMessage">Initializing...</p>
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill" style="width: 0%;"></div>
+                </div>
+                <div id="progressText" class="progress-text">0%</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let selectedSongs = [];
+        let searchResults = [];
+        let isSearching = false;
+
+        // Initialize when DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSearch();
+            console.log('Search page loaded successfully!');
+        });
+
+        function initializeSearch() {
+            // Search input events
+            const searchInput = document.getElementById('searchInput');
+            const searchBtn = document.getElementById('searchBtn');
+            
+            searchInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    performSearch();
+                }
+            });
+            
+            searchBtn.addEventListener('click', performSearch);
+            
+            // Other button events
+            document.getElementById('clearAllBtn').addEventListener('click', clearAllSongs);
+            document.getElementById('createMashupBtn').addEventListener('click', createMashup);
+            
+            // Auto-focus search input
+            searchInput.focus();
+        }
+
+        async function performSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            
+            if (!query) {
+                showStatus('Please enter a search term', 'error');
+                return;
+            }
+            
+            if (isSearching) {
+                return;
+            }
+            
+            isSearching = true;
+            showStatus('Searching...', 'info');
+            document.getElementById('searchBtn').innerHTML = '⏳';
+            
+            try {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+                
+                const data = await response.json();
+                
+                if (data.results && data.results.length > 0) {
+                    searchResults = data.results;
+                    displaySearchResults(data.results);
+                    showStatus(`Found ${data.results.length} songs`, 'success');
+                } else {
+                    showStatus('No songs found. Try a different search term.', 'error');
+                    document.getElementById('resultsSection').style.display = 'none';
+                }
+                
+            } catch (error) {
+                console.error('Search error:', error);
+                showStatus('Search failed. Please try again.', 'error');
+            } finally {
+                isSearching = false;
+                document.getElementById('searchBtn').innerHTML = '🔍';
+            }
+        }
+
+        function displaySearchResults(results) {
+            const container = document.getElementById('searchResults');
+            container.innerHTML = '';
+            
+            results.forEach(song => {
+                const songCard = createSongCard(song, false);
+                container.appendChild(songCard);
+            });
+            
+            document.getElementById('resultsSection').style.display = 'block';
+        }
+
+        function createSongCard(song, isSelected = false) {
+            const card = document.createElement('div');
+            card.className = `song-card ${isSelected ? 'selected' : ''}`;
+            card.dataset.songId = song.id;
+            
+            const duration = song.duration_ms ? formatDuration(song.duration_ms) : 'Unknown';
+            const popularity = song.popularity || 0;
+            
+            card.innerHTML = `
+                <div class="song-cover">
+                    <img src="${song.cover_url}" alt="${song.name}" onerror="this.src='https://via.placeholder.com/300x300?text=No+Image'">
+                    <div class="song-overlay">
+                        <button class="play-preview-btn" onclick="playPreview('${song.preview_url || ''}')">
+                            ${song.preview_url ? '▶️' : '🔇'}
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="song-info">
+                    <h3 class="song-title">${song.name}</h3>
+                    <p class="song-artist">${song.artist}</p>
+                    <p class="song-album">${song.album}</p>
+                    
+                    <div class="song-meta">
+                        <span class="song-duration">⏱️ ${duration}</span>
+                        <span class="song-popularity">🔥 ${popularity}%</span>
+                    </div>
+                </div>
+                
+                <div class="song-actions">
+                    ${isSelected ? 
+                        `<button class="btn danger btn-small" onclick="removeSong('${song.id}')">
+                            ❌ Remove
+                        </button>` :
+                        `<button class="btn primary btn-small" onclick="addSong('${song.id}')">
+                            ➕ Add
+                        </button>`
+                    }
+                </div>
+            `;
+            
+            return card;
+        }
+
+        function addSong(songId) {
+            const song = searchResults.find(s => s.id === songId);
+            if (!song) return;
+            
+            // Check if already selected
+            if (selectedSongs.find(s => s.id === songId)) {
+                showStatus('Song already selected', 'warning');
+                return;
+            }
+            
+            selectedSongs.push(song);
+            updateSelectedSongs();
+            updateCreateButton();
+            
+            // Update the search result card
+            const searchCard = document.querySelector(`[data-song-id="${songId}"]`);
+            if (searchCard) {
+                searchCard.classList.add('selected');
+                const button = searchCard.querySelector('button');
+                button.className = 'btn danger btn-small';
+                button.innerHTML = '❌ Remove';
+                button.onclick = () => removeSong(songId);
+            }
+            
+            showStatus(`Added "${song.name}" to selection`, 'success');
+        }
+
+        function removeSong(songId) {
+            selectedSongs = selectedSongs.filter(s => s.id !== songId);
+            updateSelectedSongs();
+            updateCreateButton();
+            
+            // Update the search result card
+            const searchCard = document.querySelector(`[data-song-id="${songId}"]`);
+            if (searchCard) {
+                searchCard.classList.remove('selected');
+                const button = searchCard.querySelector('button');
+                button.className = 'btn primary btn-small';
+                button.innerHTML = '➕ Add';
+                button.onclick = () => addSong(songId);
+            }
+            
+            const song = searchResults.find(s => s.id === songId);
+            if (song) {
+                showStatus(`Removed "${song.name}" from selection`, 'info');
+            }
+        }
+
+        function updateSelectedSongs() {
+            const container = document.getElementById('selectedSongs');
+            const section = document.getElementById('selectedSection');
+            const countSpan = document.getElementById('selectedCount');
+            
+            countSpan.textContent = selectedSongs.length;
+            
+            if (selectedSongs.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            section.style.display = 'block';
+            container.innerHTML = '';
+            
+            selectedSongs.forEach(song => {
+                const songCard = createSongCard(song, true);
+                container.appendChild(songCard);
+            });
+        }
+
+        function updateCreateButton() {
+            const button = document.getElementById('createMashupBtn');
+            const countSpan = document.getElementById('createCount');
+            
+            countSpan.textContent = selectedSongs.length;
+            
+            if (selectedSongs.length >= 1) {
+                button.disabled = false;
+                button.innerHTML = `🎤 Create Mashup (${selectedSongs.length} songs)`;
+            } else {
+                button.disabled = true;
+                button.innerHTML = `🎤 Select ${2 - selectedSongs.length} more song${2 - selectedSongs.length === 1 ? '' : 's'}`;
+            }
+        }
+
+        function clearAllSongs() {
+            if (selectedSongs.length === 0) return;
+            
+            if (confirm('Remove all selected songs?')) {
+                selectedSongs = [];
+                updateSelectedSongs();
+                updateCreateButton();
+                
+                // Update all search result cards
+                document.querySelectorAll('.song-card.selected').forEach(card => {
+                    card.classList.remove('selected');
+                    const button = card.querySelector('button');
+                    const songId = card.dataset.songId;
+                    button.className = 'btn primary btn-small';
+                    button.innerHTML = '➕ Add';
+                    button.onclick = () => addSong(songId);
+                });
+                
+                showStatus('Cleared all selected songs', 'info');
+            }
+        }
+
+        async function createMashup() {
+            if (selectedSongs.length < 2) {
+                showStatus('Please select at least 2 songs', 'error');
+                return;
+            }
+            
+            // Show loading overlay
+            document.getElementById('loadingOverlay').style.display = 'flex';
+            updateProgress(0, 'Starting mashup creation...');
+            
+            try {
+                const response = await fetch('/api/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ songs: selectedSongs })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'processing') {
+                    // Start polling for progress
+                    pollProgress();
+                } else {
+                    throw new Error(data.error || 'Failed to start processing');
+                }
+                
+            } catch (error) {
+                console.error('Create mashup error:', error);
+                hideLoading();
+                showStatus('Failed to create mashup: ' + error.message, 'error');
+            }
+        }
+
+        async function pollProgress() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                updateProgress(data.progress, data.message);
+                
+                if (data.status === 'completed') {
+                    updateProgress(100, 'Mashup created successfully!');
+                    setTimeout(() => {
+                        hideLoading();
+                        window.location.href = '/results';
+                    }, 2000);
+                } else if (data.status === 'error') {
+                    hideLoading();
+                    showStatus('Error: ' + data.message, 'error');
+                } else if (data.status === 'processing') {
+                    setTimeout(pollProgress, 1000);
+                }
+                
+            } catch (error) {
+                console.error('Progress poll error:', error);
+                hideLoading();
+                showStatus('Failed to check progress', 'error');
+            }
+        }
+
+        function updateProgress(progress, message) {
+            document.getElementById('progressFill').style.width = progress + '%';
+            document.getElementById('progressText').textContent = progress + '%';
+            document.getElementById('loadingMessage').textContent = message;
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        function playPreview(previewUrl) {
+            if (!previewUrl) {
+                showStatus('No preview available for this song', 'warning');
+                return;
+            }
+            
+            // Stop any currently playing audio
+            const existingAudio = document.querySelector('.preview-audio');
+            if (existingAudio) {
+                existingAudio.pause();
+                existingAudio.remove();
+            }
+            
+            // Create and play new audio
+            const audio = document.createElement('audio');
+            audio.className = 'preview-audio';
+            audio.src = previewUrl;
+            audio.volume = 0.5;
+            audio.play();
+            
+            // Auto-remove after 30 seconds
+            setTimeout(() => {
+                if (audio) {
+                    audio.pause();
+                    audio.remove();
+                }
+            }, 30000);
+            
+            showStatus('Playing 30-second preview...', 'info');
+        }
+
+        function formatDuration(ms) {
+            const minutes = Math.floor(ms / 60000);
+            const seconds = Math.floor((ms % 60000) / 1000);
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('searchStatus');
+            const messageSpan = document.getElementById('statusMessage');
+            
+            messageSpan.textContent = message;
+            statusDiv.className = `search-status ${type}`;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 3000);
+            
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+    </script>
+</body>
+</html>

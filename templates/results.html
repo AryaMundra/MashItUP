@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Mashups - MashItUP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🎵 My Mashups</h1>
+            <p>Preview, download, or manage your custom-created mashups</p>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav">
+            <ul>
+                <li><a href="{{ url_for('index') }}">Home</a></li>
+                <li><a href="{{ url_for('search') }}">Create Mashup</a></li>
+                <li><a href="{{ url_for('results') }}" class="active">My Mashups</a></li>
+            </ul>
+        </nav>
+
+        <!-- Session Info -->
+        <div class="card" id="sessionInfoCard">
+            <div class="card-header">
+                <h3 class="card-title">Session Information</h3>
+                <div class="card-subtitle">Your current session details</div>
+            </div>
+            
+            <div class="session-info-grid">
+                <div class="info-item">
+                    <span class="info-label">User ID:</span>
+                    <span id="sessionUserId" class="info-value">Loading...</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Session Status:</span>
+                    <span id="sessionStatus" class="info-value">Active</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Total Mashups:</span>
+                    <span id="totalMashups" class="info-value">0</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Storage Used:</span>
+                    <span id="storageUsed" class="info-value">0 KB</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Server Mashups Section -->
+            <section class="card" id="serverMashupsSection">
+                <div class="card-header">
+                    <h2 class="card-title">Server Mashups</h2>
+                    <div class="card-subtitle">Mashups stored on the server</div>
+                </div>
+                
+                <div id="serverMashupsList" class="results-grid">
+                    {% if audio_files %}
+                        {% for file in audio_files %}
+                        <div class="audio-file-card">
+                            <div class="file-info">
+                                <div class="file-name">{{ file }}</div>
+                                <div class="file-size">Size: Loading...</div>
+                                <div class="file-date">Created: {{ moment().format('YYYY-MM-DD') }}</div>
+                            </div>
+                            
+                            <div class="file-actions">
+                                <button class="btn success btn-small" onclick="previewAudio('{{ file }}')">
+                                    🎧 Preview
+                                </button>
+                                <a href="{{ url_for('download_file', filename=file) }}" class="btn primary btn-small">
+                                    💾 Download
+                                </a>
+                                <button class="btn danger btn-small" onclick="deleteServerMashup('{{ file }}')">
+                                    🗑️ Delete
+                                </button>
+                            </div>
+                            
+                            <audio class="preview-audio" style="display: none;" controls>
+                                <source src="{{ url_for('preview_file', filename=file) }}" type="audio/mpeg">
+                                Your browser does not support the audio element.
+                            </audio>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="empty-state">
+                            <div class="icon">🎵</div>
+                            <h3>No Server Mashups Found</h3>
+                            <p>No mashups found on the server. Create your first mashup to get started!</p>
+                            <a href="{{ url_for('search') }}" class="btn primary">Create Your First Mashup</a>
+                        </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            <!-- Local Mashups Section -->
+            <section class="card" id="localMashupsSection">
+                <div class="card-header">
+                    <h2 class="card-title">Local Session Mashups</h2>
+                    <div class="card-subtitle">Mashups from your current session</div>
+                </div>
+                
+                <div id="localMashupsList" class="results-grid">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </section>
+
+            <!-- Actions Section -->
+            <section class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Actions</h2>
+                    <div class="card-subtitle">Manage your mashups and session</div>
+                </div>
+                
+                <div class="action-buttons">
+                    <a href="{{ url_for('search') }}" class="btn primary btn-large">
+                        ➕ Create New Mashup
+                    </a>
+                    <button id="refreshMashupsBtn" class="btn secondary">
+                        🔄 Refresh List
+                    </button>
+                    <button id="clearLocalDataBtn" class="btn warning">
+                        🗑️ Clear Local Data
+                    </button>
+                    <button id="exportSessionBtn" class="btn info">
+                        📤 Export Session Data
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Audio Preview Modal -->
+        <div id="audioPreviewModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="previewTitle">Audio Preview</h3>
+                    <button class="modal-close" onclick="closePreviewModal()">×</button>
+                </div>
+                <div class="modal-body">
+                    <audio id="previewAudioPlayer" controls style="width: 100%;">
+                        Your browser does not support the audio element.
+                    </audio>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2024 MashupMaker. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <script>
+        // Global variables
+        let currentSessionId = null;
+        let userMashups = [];
+
+        // Initialize results page
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeResultsPage();
+        });
+
+        function initializeResultsPage() {
+            // Load session information
+            loadSessionInfo();
+            
+            // Load local mashups
+            loadLocalMashups();
+            
+            // Initialize event listeners
+            initializeEventListeners();
+            
+            // Load file sizes for server mashups
+            loadServerMashupInfo();
+            
+            console.log('Results page initialized');
+        }
+
+        function loadSessionInfo() {
+            // Get user ID from localStorage
+            const userId = localStorage.getItem('user_id');
+            if (userId) {
+                document.getElementById('sessionUserId').textContent = userId.substring(0, 12) + '...';
+                
+                // Load user mashups
+                userMashups = getUserMashups();
+                document.getElementById('totalMashups').textContent = userMashups.length;
+                
+                // Calculate storage used
+                const storageUsed = calculateStorageUsed();
+                document.getElementById('storageUsed').textContent = formatBytes(storageUsed);
+            } else {
+                document.getElementById('sessionUserId').textContent = 'No session';
+            }
+        }
+
+        function getUserMashups() {
+            const userId = localStorage.getItem('user_id');
+            if (!userId) return [];
+            
+            const stored = localStorage.getItem('mashup_user_data_' + userId);
+            return stored ? JSON.parse(stored) : [];
+        }
+
+        function loadLocalMashups() {
+            const container = document.getElementById('localMashupsList');
+            
+            if (userMashups.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">📱</div>
+                        <h3>No Local Mashups</h3>
+                        <p>No mashups found in your current session. Create a mashup to see it here!</p>
+                        <a href="/search" class="btn primary">Create Mashup</a>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = userMashups.map(mashup => `
+                <div class="audio-file-card local-mashup" data-mashup-id="${mashup.id}">
+                    <div class="file-info">
+                        <div class="file-name">${mashup.filename}</div>
+                        <div class="file-size">Duration: ${mashup.duration || 'Unknown'}</div>
+                        <div class="file-date">Created: ${new Date(mashup.created_at).toLocaleDateString()}</div>
+                        <div class="file-songs">Songs: ${mashup.songs_used ? mashup.songs_used.length : 'Unknown'}</div>
+                    </div>
+                    
+                    <div class="file-actions">
+                        <button class="btn info btn-small" onclick="viewMashupDetails('${mashup.id}')">
+                            📋 Details
+                        </button>
+                        <button class="btn danger btn-small" onclick="removeLocalMashup('${mashup.id}')">
+                            🗑️ Remove
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function initializeEventListeners() {
+            // Refresh mashups
+            document.getElementById('refreshMashupsBtn').addEventListener('click', function() {
+                location.reload();
+            });
+
+            // Clear local data
+            document.getElementById('clearLocalDataBtn').addEventListener('click', function() {
+                if (confirm('This will clear all your local mashup data. Are you sure?')) {
+                    clearLocalData();
+                }
+            });
+
+            // Export session data
+            document.getElementById('exportSessionBtn').addEventListener('click', function() {
+                exportSessionData();
+            });
+        }
+
+        function loadServerMashupInfo() {
+            // Load file sizes and additional info for server mashups
+            document.querySelectorAll('.audio-file-card:not(.local-mashup)').forEach(card => {
+                const fileName = card.querySelector('.file-name').textContent;
+                
+                // You can add API calls here to get file info
+                // For now, just update the display
+                const sizeElement = card.querySelector('.file-size');
+                sizeElement.textContent = 'Size: Calculating...';
+            });
+        }
+
+        function previewAudio(filename) {
+            const modal = document.getElementById('audioPreviewModal');
+            const player = document.getElementById('previewAudioPlayer');
+            const title = document.getElementById('previewTitle');
+            
+            title.textContent = `Preview: ${filename}`;
+            player.src = `/preview/${filename}`;
+            modal.style.display = 'flex';
+            
+            // Auto-play if supported
+            player.play().catch(e => console.log('Auto-play prevented'));
+        }
+
+        function closePreviewModal() {
+            const modal = document.getElementById('audioPreviewModal');
+            const player = document.getElementById('previewAudioPlayer');
+            
+            player.pause();
+            player.src = '';
+            modal.style.display = 'none';
+        }
+
+        function deleteServerMashup(filename) {
+            if (confirm(`Are you sure you want to delete "${filename}"?`)) {
+                fetch(`/api/delete-mashup/${filename}`, {
+                    method: 'DELETE'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    } else {
+                        alert('Failed to delete mashup: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Delete error:', error);
+                    alert('Failed to delete mashup');
+                });
+            }
+        }
+
+        function removeLocalMashup(mashupId) {
+            if (confirm('Remove this mashup from your local session?')) {
+                const userId = localStorage.getItem('user_id');
+                if (userId) {
+                    userMashups = userMashups.filter(m => m.id !== mashupId);
+                    localStorage.setItem('mashup_user_data_' + userId, JSON.stringify(userMashups));
+                    loadLocalMashups();
+                    loadSessionInfo();
+                }
+            }
+        }
+
+        function viewMashupDetails(mashupId) {
+            const mashup = userMashups.find(m => m.id === mashupId);
+            if (mashup) {
+                alert(`Mashup Details:\n\nFilename: ${mashup.filename}\nCreated: ${new Date(mashup.created_at).toLocaleString()}\nSongs Used: ${mashup.songs_used ? mashup.songs_used.length : 'Unknown'}\nSession ID: ${mashup.session_id || 'Unknown'}`);
+            }
+        }
+
+        function clearLocalData() {
+            const userId = localStorage.getItem('user_id');
+            if (userId) {
+                localStorage.removeItem('mashup_user_data_' + userId);
+                sessionStorage.clear();
+            }
+            
+            // Notify server to cleanup session
+            fetch('/api/cleanup-session', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({clear_all: true})
+            }).then(() => {
+                location.reload();
+            });
+        }
+
+        function exportSessionData() {
+            const sessionData = {
+                user_id: localStorage.getItem('user_id'),
+                mashups: userMashups,
+                exported_at: new Date().toISOString(),
+                total_mashups: userMashups.length
+            };
+            
+            const blob = new Blob([JSON.stringify(sessionData, null, 2)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `mashup_session_${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function calculateStorageUsed() {
+            let total = 0;
+            for (let key in localStorage) {
+                if (localStorage.hasOwnProperty(key)) {
+                    total += localStorage[key].length;
+                }
+            }
+            for (let key in sessionStorage) {
+                if (sessionStorage.hasOwnProperty(key)) {
+                    total += sessionStorage[key].length;
+                }
+            }
+            return total;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Handle page unload
+        window.addEventListener('beforeunload', function() {
+            // Cleanup session if needed
+            fetch('/api/cleanup-session', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({page_unload: true}),
+                keepalive: true
+            }).catch(console.error);
+        });
+    </script>
+</body>
+</html>
