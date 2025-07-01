@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'modules'))
 
 from flask import Flask, render_template, request, jsonify, send_file, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
-
+from flask_cors import CORS, cross_origin
 # Import your modules
 from modules.mashup_editor import MashupEditor
 from modules import spotify_deployer, music_downloader, mashup
@@ -25,6 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
 app.config['SESSION_PERMANENT'] = True
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
