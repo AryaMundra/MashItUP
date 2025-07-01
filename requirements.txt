@@ -43,6 +43,6 @@ spotipy
 wheel
 setuptools
 gunicorn
-
+flask_cors
 # INstall freyr ( npm install -g freyr)
 #Install atomicparsley ( choco install atomicparsley)
