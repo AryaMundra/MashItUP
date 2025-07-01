@@ -13,52 +13,6 @@ Preview ,edit and export your finished mashup as an audio file
 All in your browser, no extra software required
 
 
-# Folder Structure
-text
-mashitup/
-│
-├── app.py
-├── requirements.txt
-├── .env
-│
-├── modules/
-│   ├── __init__.py
-│   ├── mashup_editor.py
-│   ├── audio_utils.py
-│   ├── spotify_deployer.py
-│   ├── session_manager.py
-│   ├── timeline_utils.py
-│   ├── file_utils.py
-│   ├── config.py
-│   └── logger.py
-│
-├── static/
-│   ├── css/
-│   │   └── style.css
-│   ├── js/
-│   │   └── custom.js
-│   └── images/
-│
-├── templates/
-│   ├── base.html
-│   ├── editor.html
-│   ├── search.html
-│   └── index.html
-│
-├── downloaded_music/
-│   └── (your imported/downloaded songs)
-│
-├── user_sessions/
-│   ├── <session-id>/
-│   │   ├── music/
-│   │   ├── mashup/
-│   │   └── metadata.json
-│   └── ...
-│
-├── docs/
-│   └── editor-screenshot.png
-│
-└── README.md
 #  Getting Started
 1. Clone the repository
 bash
