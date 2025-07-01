@@ -7,7 +7,7 @@ services:
       pip install --upgrade pip
       pip install -r requirements.txt
       npm install -g freyr
-      apt-get update && apt-get install -y atomicparsley
+
     startCommand: gunicorn app:app --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
