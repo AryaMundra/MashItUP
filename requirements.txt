@@ -42,7 +42,7 @@ spotipy
 # dependencies for Render
 wheel
 setuptools
-
+gunicorn
 
 # INstall freyr ( npm install -g freyr)
 #Install atomicparsley ( choco install atomicparsley)
