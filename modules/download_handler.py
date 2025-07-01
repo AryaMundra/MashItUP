@@ -34,10 +34,14 @@ class IsolatedDownloadHandler:
             selected_songs = session_data['selected_songs']
             urls_file = os.path.join(session_data['session_folder'], 'urls.txt')
             
-            # Create URLs file
-            success = spotify_deployer.create_urls_file(selected_songs)
+            # FIX: Create URLs file with proper path handling
+            success = self._create_urls_file_for_session(selected_songs, urls_file)
             if not success:
                 raise Exception("Failed to create URLs file")
+            
+            # Verify file exists before proceeding
+            if not os.path.exists(urls_file):
+                raise Exception(f"URLs file not created at {urls_file}")
             
             # Download to session's music folder
             download_result = music_downloader.download_from_urls(
@@ -78,6 +82,29 @@ class IsolatedDownloadHandler:
             # Remove from active downloads
             if session_id in self.active_downloads:
                 del self.active_downloads[session_id]
+
+    def _create_urls_file_for_session(self, selected_songs: List[Dict], urls_file_path: str) -> bool:
+        """Create URLs file for session with proper error handling"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(urls_file_path), exist_ok=True)
+            
+            with open(urls_file_path, 'w', encoding='utf-8') as f:
+                for song in selected_songs:
+                    if 'spotify_url' in song:
+                        f.write(f"{song['spotify_url']}\n")
+                    elif 'url' in song:
+                        f.write(f"{song['url']}\n")
+                    else:
+                        logger.warning(f"No URL found for song: {song}")
+            
+            logger.info(f"Created URLs file with {len(selected_songs)} songs at {urls_file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to create URLs file: {e}")
+            return False
+
 
 # Global download handler instance
 download_handler = IsolatedDownloadHandler()

@@ -1,35 +1,33 @@
 import os
 import sys
+import threading
+import uuid
+import time
+import logging
+from datetime import timedelta
+import shutil
 
 # Add modules directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'modules'))
 
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, session
+from flask import Flask, render_template, request, jsonify, send_file, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
-import threading
-import time
-import json
-import uuid
-import logging
 
 # Import your modules
 from modules.mashup_editor import MashupEditor
 from modules import spotify_deployer, music_downloader, mashup
-
-# IMPORT DATA HANDLERS - THIS IS CRUCIAL
 from modules.session_manager import session_manager
-from modules.download_handler import download_handler  
+from modules.download_handler import download_handler
 from modules.mashup_handler import mashup_handler
 
-# Rest of your app.py code...
-
-# Set up logging configuration
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here-change-this')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-this')
+app.config['SESSION_PERMANENT'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 
 # CORRECT - Check for production environment
 if os.environ.get('PYTHON_ENV') == 'production' or os.environ.get('PORT'):
@@ -38,7 +36,6 @@ if os.environ.get('PYTHON_ENV') == 'production' or os.environ.get('PORT'):
 else:
     app.config['DEBUG'] = True
     logging.basicConfig(level=logging.DEBUG)
-
 
 # Initialize Socket.IO
 socketio = SocketIO(
@@ -49,6 +46,11 @@ socketio = SocketIO(
     engineio_logger=False
 )
 
+# Global variables
+processing_statuses = {}  # user_id -> status
+user_sessions = {}  # user_id -> session_id
+editor_instances = {}
+
 def ensure_directories():
     directories = ['user_sessions', 'Final_Mashup', 'downloaded_music', 'static/temp']
     for directory in directories:
@@ -57,18 +59,69 @@ def ensure_directories():
 
 ensure_directories()
 
-# Global variables
-processing_status = {"status": "idle", "message": "", "progress": 0}
-editor_instances = {}
+def get_user_id():
+    """Get or create a unique user ID for this browser session"""
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())
+        session.permanent = True
+    return session['user_id']
+
+def process_mashup(selected_songs, user_id):
+    """Process mashup for a specific user"""
+    global processing_statuses, user_sessions
+    
+    try:
+        # Create isolated session for this user
+        session_id = session_manager.create_session(selected_songs)
+        
+        # Store session ID for this user
+        user_sessions[user_id] = session_id
+        
+        logger.info(f"Created session {session_id} for user {user_id}")
+        
+        processing_statuses[user_id] = {
+            "status": "processing", 
+            "message": "Creating mashup...This may take some time", 
+            "progress": 5,
+            "session_id": session_id
+        }
+        
+        # Create mashup using isolated session
+        result = mashup_handler.create_mashup_for_session(session_id)
+        
+        if result.get('success', False):
+            processing_statuses[user_id] = {
+                "status": "completed", 
+                "message": "Mashup created successfully!", 
+                "progress": 100,
+                "session_id": session_id,
+                "files": {
+                    "mashup": os.path.basename(result['mashup_file'])
+                }
+            }
+            
+            logger.info(f"Mashup completed for user {user_id}, session {session_id}")
+        else:
+            raise Exception(result.get('error', 'Unknown error'))
+        
+    except Exception as e:
+        logger.error(f"Process mashup error for user {user_id}: {e}")
+        processing_statuses[user_id] = {
+            "status": "error", 
+            "message": f"Error: {str(e)}", 
+            "progress": 0
+        }
 
 # ===== EXISTING ROUTES =====
 
 @app.route('/')
 def index():
+    get_user_id()  # Ensure user has an ID
     return render_template('index.html')
 
 @app.route('/search')
 def search():
+    get_user_id()  # Ensure user has an ID
     return render_template('search.html')
 
 @app.route('/api/search', methods=['POST'])
@@ -90,95 +143,100 @@ def api_search():
 
 @app.route('/api/process', methods=['POST'])
 def api_process():
-    global processing_status
-    
+    """Process selected songs into mashup"""
     try:
-        selected_songs = request.json.get('songs', [])
+        user_id = get_user_id()
+        data = request.get_json()
+        selected_songs = data.get('songs', [])
+        
         if not selected_songs:
-            return jsonify({'error': 'No songs selected'}), 400
+            return jsonify({'error': 'No songs provided'}), 400
         
         if len(selected_songs) < 2:
-            return jsonify({'error': 'Please select at least 2 songs'}), 400
+            return jsonify({'error': 'At least 2 songs required'}), 400
         
-        processing_status = {"status": "idle", "message": "", "progress": 0}
-        
-        thread = threading.Thread(target=process_mashup, args=(selected_songs,))
+        # Start processing for this specific user
+        thread = threading.Thread(target=process_mashup, args=(selected_songs, user_id))
         thread.daemon = True
         thread.start()
         
         return jsonify({
-            'message': 'Processing started successfully', 
             'status': 'processing',
-            'songs_count': len(selected_songs)
+            'message': 'Mashup creation started',
+            'user_id': user_id
         })
-    
-    except Exception as e:
-        return jsonify({'error': f'Failed to start processing: {str(e)}'}), 500
-
-def process_mashup(selected_songs):
-    global processing_status
-    
-    try:
-        # Create isolated session for this user
-        session_id = session_manager.create_session(selected_songs)
-        
-        processing_status = {
-            "status": "processing", 
-            "message": "Creating isolated session...", 
-            "progress": 5,
-            "session_id": session_id
-        }
-        
-        # Create mashup using isolated session
-        result = mashup_handler.create_mashup_for_session(session_id)
-        
-        if result['success']:
-            processing_status = {
-                "status": "completed", 
-                "message": "Mashup created successfully!", 
-                "progress": 100,
-                "session_id": session_id,
-                "files": {
-                    "mashup": os.path.basename(result['mashup_file'])
-                }
-            }
-        else:
-            raise Exception(result.get('error', 'Unknown error'))
         
     except Exception as e:
-        processing_status = {
-            "status": "error", 
-            "message": f"Error: {str(e)}", 
-            "progress": 0
-        }
-
+        logger.error(f"API process error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/status')
 def api_status():
-    return jsonify(processing_status)
+    """Get processing status for current user"""
+    try:
+        user_id = get_user_id()
+        user_status = processing_statuses.get(user_id, {'status': 'unknown'})
+        
+        # If completed, store session ID in Flask session
+        if user_status.get('status') == 'completed':
+            session_id = user_sessions.get(user_id)
+            if session_id:
+                session['editor_session_id'] = session_id
+                session['current_mashup_session'] = session_id
+                logger.info(f"Stored session ID {session_id} in Flask session for user {user_id}")
+        
+        return jsonify(user_status)
+        
+    except Exception as e:
+        logger.error(f"API status error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/results')
 def results():
+    """Show user's mashups from both session and global storage"""
     try:
-        mashup_folder = 'Final_Mashup'
-        audio_files = []
+        user_id = get_user_id()
+        session_id = user_sessions.get(user_id)
         
-        if os.path.exists(mashup_folder):
-            all_files = os.listdir(mashup_folder)
-            audio_extensions = ['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg']
-            audio_files = [f for f in all_files 
-                          if any(f.lower().endswith(ext) for ext in audio_extensions)]
+        # Also store in Flask session for template access
+        if session_id:
+            session['editor_session_id'] = session_id
+            session['current_mashup_session'] = session_id
+        
+        logger.info(f"Results page - User: {user_id}, Session ID: {session_id}")
+        
+        # Get files from session folder if session exists
+        session_files = []
+        if session_id:
+            session_data = session_manager.get_session(session_id)
+            if session_data and 'mashup_folder' in session_data:
+                mashup_folder = session_data['mashup_folder']
+                if os.path.exists(mashup_folder):
+                    session_files = [f for f in os.listdir(mashup_folder) 
+                                   if f.lower().endswith(('.mp3', '.wav', '.m4a'))]
+        
+        # Get files from global Final_Mashup folder
+        global_files = []
+        if os.path.exists('Final_Mashup'):
+            global_files = [f for f in os.listdir('Final_Mashup') 
+                          if f.lower().endswith(('.mp3', '.wav', '.m4a'))]
+        
+        # Combine both lists
+        all_files = {
+            'session_files': session_files,
+            'global_files': global_files,
+            'session_id': session_id
+        }
         
         return render_template('results.html', 
-                             audio_files=audio_files,
-                             total_files=len(audio_files),
-                             error=None)
+                             audio_files=all_files, 
+                             session_id=session_id)
     
     except Exception as e:
+        logger.error(f"Error loading results: {e}")
         return render_template('results.html', 
-                             audio_files=[], 
-                             total_files=0,
-                             error=str(e))
+                             audio_files={'session_files': [], 'global_files': []},
+                             session_id=None)
 
 @app.route('/download/<filename>')
 def download_file(filename):
@@ -199,113 +257,161 @@ def download_file(filename):
             download_name=filename,
             mimetype='application/octet-stream'
         )
-    
-    except Exception as e:
-        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+    except:
+        return None
 
-@app.route('/preview/<filename>')
-def preview_file(filename):
+@app.route('/download-session/<session_id>/<filename>')
+def download_session_file(session_id, filename):
+    """Download file from user session"""
     try:
-        audio_extensions = ['.wav', '.mp3', '.flac', '.m4a', '.aac', '.ogg']
+        session_data = session_manager.get_session(session_id)
+        if not session_data:
+            return "Session not found", 404
         
-        if not any(filename.lower().endswith(ext) for ext in audio_extensions):
-            return jsonify({'error': 'Only audio files allowed'}), 403
+        mashup_folder = session_data['mashup_folder']
+        file_path = os.path.join(mashup_folder, filename)
         
-        file_path = os.path.join('Final_Mashup', filename)
-        
-        if not os.path.exists(file_path):
-            return jsonify({'error': 'File not found'}), 404
-        
-        return send_from_directory(
-            'Final_Mashup', 
-            filename, 
-            as_attachment=False,
-            mimetype='audio/wav'
-        )
+        if os.path.exists(file_path):
+            return send_file(file_path, as_attachment=True, download_name=filename)
+        else:
+            return "File not found", 404
     
     except Exception as e:
-        return jsonify({'error': f'Preview failed: {str(e)}'}), 500
-    
-@app.route('/preview-original/<path:filename>')
-def preview_original_file(filename):
-    """Stream original audio files for preview"""
+        logger.error(f"Error downloading session file: {e}")
+        return "Download failed", 500
+
+@app.route('/preview-session/<session_id>/<filename>')
+def preview_session_file(session_id, filename):
+    """Preview file from user session"""
     try:
-        # Remove any extension from filename first
-        base_filename = os.path.splitext(filename)[0]
+        session_data = session_manager.get_session(session_id)
+        if not session_data:
+            return "Session not found", 404
         
-        # Try different extensions
-        audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.aac']
+        mashup_folder = session_data['mashup_folder']
+        file_path = os.path.join(mashup_folder, filename)
         
-        # First, try to find exact filename match
-        if os.path.exists(os.path.join('downloaded_music', filename)):
-            return send_from_directory(
-                'downloaded_music', 
-                filename, 
-                as_attachment=False,
-                mimetype='audio/mpeg'
-            )
-        
-        # Try with different extensions
-        for ext in audio_extensions:
-            test_filename = base_filename + ext
-            file_path = os.path.join('downloaded_music', test_filename)
-            
-            if os.path.exists(file_path):
-                return send_from_directory(
-                    'downloaded_music', 
-                    test_filename, 
-                    as_attachment=False,
-                    mimetype=f'audio/{ext[1:]}'
-                )
-        
-        # Debug: List all files in downloaded_music folder
-        if os.path.exists('downloaded_music'):
-            available_files = os.listdir('downloaded_music')
-            logger.info(f"Available files in downloaded_music: {available_files}")
-            logger.info(f"Looking for: {filename} or {base_filename}")
-        
-        return jsonify({'error': f'Audio file not found: {filename}'}), 404
+        if os.path.exists(file_path):
+            return send_file(file_path, mimetype="audio/wav")
+        else:
+            return "File not found", 404
     
     except Exception as e:
-        logger.error(f"Preview failed for {filename}: {e}")
-        return jsonify({'error': f'Preview failed: {str(e)}'}), 500
+        logger.error(f"Error previewing session file: {e}")
+        return "Preview failed", 500
+
+@app.route('/api/session-keepalive', methods=['POST'])
+def session_keepalive():
+    """Keep session alive during editing"""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        
+        if session_id and session_manager:
+            # Update last accessed time
+            session_data = session_manager.get_session(session_id)
+            if session_data:
+                session_manager.update_session_status(session_id, 'editing', is_editing=True)
+                return jsonify({'success': True})
+        
+        return jsonify({'error': 'Session not found'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
-
-# ===== EDITOR ROUTES =====
+# ===== EDITOR ROUTES (EXACT SAME AS BEFORE) =====
 
 @app.route('/edit/<filename>')
 def edit_mashup(filename):
     try:
         # Get session ID from query params
         session_id = request.args.get('session_id')
+        print(f"✔ Debug: Requested session {session_id}")
         
         if session_id:
-            # Prepare existing session for editing
-            result = mashup_handler.prepare_for_editing(session_id, filename)
+            # Try to get existing session
+            session_data = session_manager.get_session(session_id)
+            print(f"✔ Debug: Session exists: {session_data is not None}")
+            
+            if not session_data:
+                # Session was cleaned up, recreate it
+                print(f"⚠️ Debug: Session {session_id} was cleaned up, recreating for editing")
+                logger.info(f"Session {session_id} was cleaned up, recreating for editing")
+                
+                # Find the user who owns this session
+                user_id = None
+                print(f"🔍 Debug: Searching for user in {len(user_sessions)} user sessions")
+                for uid, sid in user_sessions.items():
+                    print(f"   - User {uid[:8]}... has session {sid[:8]}...")
+                    if sid == session_id:
+                        user_id = uid
+                        break
+                
+                if user_id:
+                    print(f"✔ Debug: Found user {user_id[:8]}... for session, recreating")
+                    # Recreate session for editing
+                    new_session_id = session_manager.create_session([])
+                    user_sessions[user_id] = new_session_id
+                    session_id = new_session_id
+                    session_data = session_manager.get_session(session_id)
+                    
+                    # Mark as editing to prevent cleanup
+                    session_manager.update_session_status(session_id, 'editing', is_editing=True)
+                    print(f"✔ Debug: Created new session {session_id[:8]}... for editing")
+                else:
+                    print(f"⚠️ Debug: No user found for session, creating fallback session")
+                    # Create completely new session
+                    session_id = str(uuid.uuid4())
+                    session_data = {
+                        'music_folder': 'downloaded_music',
+                        'mashup_folder': 'Final_Mashup'
+                    }
+                    print(f"✔ Debug: Created fallback session {session_id[:8]}...")
+            else:
+                print(f"✔ Debug: Session exists, marking as editing")
+                # Session exists, mark as editing
+                session_manager.update_session_status(session_id, 'editing', is_editing=True)
+                print(f"✔ Debug: Session {session_id[:8]}... marked as editing")
         else:
-            # Create new session for editing
-            result = mashup_handler.prepare_for_editing(None, filename)
-            session_id = result.get('session_id')
+            print(f"⚠️ Debug: No session ID provided, creating new session")
+            # No session ID provided, create new
+            session_id = str(uuid.uuid4())
+            session_data = {
+                'music_folder': 'downloaded_music',
+                'mashup_folder': 'Final_Mashup'
+            }
+            print(f"✔ Debug: Created new session {session_id[:8]}... without session ID")
         
-        if not result['success']:
-            return render_template('error.html', 
-                                 error_code=500, 
-                                 error_message=result['error']), 500
+        print(f"🔍 Debug: Session data folders:")
+        print(f"   - Music folder: {session_data.get('music_folder', 'N/A')}")
+        print(f"   - Mashup folder: {session_data.get('mashup_folder', 'N/A')}")
         
-        # Create editor instance with session-specific folders
-        session_data = session_manager.get_session(session_id)
+        # Create editor instance
+        print(f"🔧 Debug: Creating MashupEditor instance")
         editor = MashupEditor(
-            music_folder=session_data['music_folder'],
-            mashup_folder=session_data['mashup_folder']
+            music_folder=session_data.get('music_folder', 'downloaded_music'),
+            mashup_folder=session_data.get('mashup_folder', 'Final_Mashup'),
+            session_id=session_id
         )
+        
+        print(f"✔ Debug: MashupEditor created successfully")
         
         editor_instances[session_id] = editor
         session['editor_session_id'] = session_id
         
+        print(f"🔍 Debug: Stored editor in instances, total editors: {len(editor_instances)}")
+        
         # Get data for template
+        print(f"📊 Debug: Getting songs and segments data")
         songs_data = editor.get_songs_data() or {}
         segments_data = editor.get_segments_data() or []
+        
+        print(f"✔ Debug: Data retrieved:")
+        print(f"   - Songs: {len(songs_data)} songs")
+        print(f"   - Segments: {len(segments_data)} segments")
+        
+        print(f"✔ Debug: Editor loaded successfully for session {session_id[:8]}...")
         
         return render_template('editor.html', 
                              songs=songs_data,
@@ -314,6 +420,13 @@ def edit_mashup(filename):
                              session_id=session_id)
     
     except Exception as e:
+        print(f"❌ Debug: Error loading editor: {e}")
+        print(f"❌ Debug: Error type: {type(e).__name__}")
+        import traceback
+        print(f"❌ Debug: Full traceback:")
+        traceback.print_exc()
+        
+        logger.error(f"Error loading editor: {e}")
         return render_template('error.html', 
                              error_code=500, 
                              error_message=f"Failed to load editor: {str(e)}"), 500
@@ -390,9 +503,7 @@ def add_segment():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/editor/replacement-options', methods=['POST'])
 def get_replacement_options():
     try:
@@ -447,7 +558,6 @@ def replace_segment_advanced():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/editor/replace-segment', methods=['POST'])
 def replace_segment():
     try:
@@ -473,7 +583,7 @@ def replace_segment():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
+
 @app.route('/api/editor/delete-segment-advanced', methods=['POST'])
 def delete_segment_advanced():
     try:
@@ -545,7 +655,6 @@ def add_segment_at_position():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/editor/delete-segment', methods=['POST'])
 def delete_segment():
     try:
@@ -568,7 +677,6 @@ def delete_segment():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
 
 @app.route('/api/editor/check-overlap', methods=['POST'])
 def check_overlap():
@@ -747,6 +855,43 @@ def preview_mashup():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+from flask import send_file, abort
+
+@app.route('/preview-original/<song_id>')
+def preview_original(song_id):
+    """
+    Stream the original song audio for preview in the editor.
+    """
+    try:
+        session_id = session.get('editor_session_id')
+        if not session_id or session_id not in editor_instances:
+            return abort(404, description="No active editor session")
+        
+        editor = editor_instances[session_id]
+        
+        # Try exact match
+        song_data = editor.songs.get(song_id)
+        
+        # If not found, try without extension
+        if not song_data:
+            song_id_no_ext = os.path.splitext(song_id)[0]
+            song_data = editor.songs.get(song_id_no_ext)
+        
+        if not song_data:
+            return abort(404, description="Song not found in session")
+        
+        file_path = song_data['file_path']
+        if not os.path.exists(file_path):
+            return abort(404, description="File does not exist")
+        
+        ext = os.path.splitext(file_path)[1].lower()
+        mimetype = "audio/mpeg" if ext == ".mp3" else "audio/wav"
+        
+        return send_file(file_path, mimetype=mimetype)
+    
+    except Exception as e:
+        logger.error(f"Error in preview-original: {e}")
+        return abort(500, description=str(e))
 
 @app.route('/api/editor/export', methods=['POST'])
 def export_mashup():
@@ -844,23 +989,53 @@ def cleanup_editor():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-# ===== INITIALIZATION =====
-
-def initialize_app():
+@app.route('/api/cleanup-session', methods=['POST'])
+def cleanup_session():
+    """Cleanup session data"""
     try:
-        directories = ['downloaded_music', 'Final_Mashup', 'static/temp']
-        for directory in directories:
-            os.makedirs(directory, exist_ok=True)
+        user_id = get_user_id()
+        data = request.get_json() or {}
         
-        app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+        if user_id and user_id in user_sessions:
+            session_id = user_sessions[user_id]
+            
+            # Cleanup session manager
+            if session_manager:
+                session_manager.cleanup_session(session_id, force=True)
+            
+            # Remove from our tracking
+            del user_sessions[user_id]
+            if user_id in processing_statuses:
+                del processing_statuses[user_id]
+            
+            # Cleanup editor instance if exists
+            if session_id in editor_instances:
+                editor = editor_instances[session_id]
+                editor.cleanup()
+                del editor_instances[session_id]
+            
+            logger.info(f"Cleaned up session for user {user_id}")
         
-        print("✓ Application initialized successfully")
+        return jsonify({'success': True})
         
-        return True
     except Exception as e:
-        print(f"✗ Application initialization failed: {e}")
-        return False
+        logger.error(f"Cleanup error: {e}")
+        return jsonify({'error': str(e)}), 500
+    
+@app.route('/api/extend-session', methods=['POST'])
+def extend_session():
+    """Extend session timeout for editing"""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        
+
+        
+        return jsonify({'error': 'Session not found'}), 404
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 # ===== MAIN EXECUTION =====
 
@@ -888,4 +1063,3 @@ if __name__ == '__main__':
             port=port,
             allow_unsafe_werkzeug=True
         )
-

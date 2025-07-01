@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class UserSessionManager:
     """Manage isolated user sessions for mashup creation"""
     
-    def __init__(self, base_folder="user_sessions", cleanup_interval=300):
+    def __init__(self, base_folder="user_sessions", cleanup_interval=900):
         self.base_folder = base_folder
         self.sessions = {}
         self.cleanup_interval = cleanup_interval
@@ -120,23 +120,54 @@ class UserSessionManager:
         current_time = datetime.now()
         expired_sessions = []
         
+        print(f"🔍 CLEANUP DEBUG: Starting cleanup at {current_time}")
+        print(f"🔍 CLEANUP DEBUG: Total sessions: {len(self.sessions)}")
+        
         with self.lock:
             for session_id, session_data in self.sessions.items():
-                # Different timeouts based on status
-                if session_data.get('is_editing', False):
-                    timeout = timedelta(hours=2)
-                elif session_data['status'] == 'completed':
-                    timeout = timedelta(minutes=30)
-                else:
-                    timeout = timedelta(minutes=15)
+                time_since_access = current_time - session_data['last_accessed']
                 
-                if current_time - session_data['last_accessed'] > timeout:
+                print(f"🔍 Session {session_id[:8]}...")
+                print(f"   - Status: {session_data.get('status')}")
+                print(f"   - Is editing: {session_data.get('is_editing')}")
+                print(f"   - Last accessed: {time_since_access.total_seconds():.1f}s ago")
+                
+                # IMMEDIATE PROTECTION: Skip recently accessed sessions (last 2 minutes)
+                if time_since_access < timedelta(minutes=2):
+                    print(f"   - PROTECTED: Recently accessed")
+                    continue
+                
+                # PROTECTION: Skip editing sessions
+                if (session_data.get('is_editing', False) or 
+                    session_data.get('status') == 'editing'):
+                    print(f"   - PROTECTED: Editing session")
+                    continue
+                
+                # Apply normal timeout logic
+                if session_data['status'] == 'completed':
+                    timeout = timedelta(hours=2)
+                else:
+                    timeout = timedelta(hours=1)
+                
+                if time_since_access > timeout:
+                    print(f"   - MARKED FOR CLEANUP: Timeout exceeded")
                     expired_sessions.append(session_id)
+                else:
+                    print(f"   - SAFE: Within timeout")
+        
+        print(f"🔍 CLEANUP DEBUG: {len(expired_sessions)} sessions marked for cleanup")
+        
+        # Clean up expired sessions
+        for session_id in expired_sessions:
+            print(f"🗑️ Actually cleaning up session {session_id}")
+            self.cleanup_session(session_id, force=True)
+
         
         # Clean up expired sessions
         for session_id in expired_sessions:
             logger.info(f"Cleaning up expired session {session_id}")
             self.cleanup_session(session_id, force=True)
+
 
 # Global session manager instance
 session_manager = UserSessionManager()

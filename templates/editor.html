@@ -214,7 +214,7 @@
                     <button class="btn btn-small success" onclick="playSong('${songId}')">🎧 Play</button>
                     <button class="btn btn-small" onclick="pauseSong('${songId}')">⏸ Pause</button>
                     <button class="btn btn-small primary" onclick="addToMashup('${songId}')">➕ Add to End</button>
-                    <button class="btn btn-small info" onclick="addAtSpecificPosition('${songId}')">📍 Add at Position</button>
+                   
                     <button class="btn btn-small warning" onclick="replaceSelected('${songId}')">🔄 Replace Selected</button>
                 </div>
 
@@ -894,6 +894,97 @@
             }
         }
 
+        // Fix the timeline position formatting
+        function formatTimePosition(position) {
+            if (position === undefined || position === null || isNaN(position)) {
+                console.warn('Invalid position value:', position);
+                return "0.00";
+            }
+            return Number(position / 1000).toFixed(2); // Convert ms to seconds
+        }
+
+        // Update your timeline display function
+        function displayTimelinePositions(positions) {
+            const container = document.getElementById('timelinePositions');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            if (!positions || positions.length === 0) {
+                container.innerHTML = '<p>No positions available</p>';
+                return;
+            }
+            
+            positions.forEach(pos => {
+                const positionDiv = document.createElement('div');
+                positionDiv.className = 'timeline-position';
+                
+                // Safe formatting with null checks
+                const formattedTime = formatTimePosition(pos.position);
+                const gapDuration = pos.gap_duration ? formatTimePosition(pos.gap_duration) : '';
+                
+                positionDiv.innerHTML = `
+                    <span class="position-time">${formattedTime}s</span>
+                    <span class="position-type">${pos.type}</span>
+                    ${gapDuration ? `<span class="gap-duration">(${gapDuration}s gap)</span>` : ''}
+                    <button onclick="addAtPosition(${pos.position})" class="btn btn-small">Add Here</button>
+                `;
+                
+                container.appendChild(positionDiv);
+            });
+        }
+
+      
+        // Fix the add at position function - it should actually add a segment!
+        async function addAtPosition(position, songId, startTime, endTime) {
+            if (position === undefined || position === null) {
+                showStatus('Invalid position selected', 'error');
+                return;
+            }
+            
+            // If no song data provided, we need to get it from the current selection
+            if (!songId || !startTime || !endTime) {
+                showStatus('Please select a song and time range first', 'error');
+                return;
+            }
+            
+            try {
+                showStatus(`Adding segment at position ${formatTimePosition(position)}s...`, 'info');
+                
+                const response = await fetch('/api/editor/add-segment-at-position', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        song_id: songId,
+                        start_time: startTime,
+                        end_time: endTime,
+                        mashup_position: position,
+                        section: 'body',
+                        shift_timeline: true
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    segments = result.segments;
+                    renderTimeline();
+                    loadUsedSegments(songId);
+                    showStatus(`Added ${songId} at position ${formatTimePosition(position)}s`, 'success');
+                    
+                    // Close any position selection modal
+                    closePositionModal();
+                } else {
+                    showStatus('Failed to add segment: ' + result.error, 'error');
+                }
+            } catch (error) {
+                console.error('Error adding segment at position:', error);
+                showStatus('Failed to add segment at position', 'error');
+            }
+        }
+
+
+
         // Add with position selection (for advanced users)
         async function addAtSpecificPosition(songId) {
             const card = document.querySelector(`[data-song="${songId}"]`);
@@ -920,6 +1011,30 @@
                 showStatus('Error getting timeline positions: ' + error.message, 'error');
             }
         }
+
+        // Keep session alive while editing
+        let keepAliveInterval;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const sessionId = '{{ session_id }}';
+            
+            // Send keep-alive every 2 minutes while editing
+            keepAliveInterval = setInterval(function() {
+                fetch('/api/session-keepalive', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({session_id: sessionId})
+                }).catch(console.error);
+            }, 120000); // 2 minutes
+        });
+
+        // Stop keep-alive when leaving page
+        window.addEventListener('beforeunload', function() {
+            if (keepAliveInterval) {
+                clearInterval(keepAliveInterval);
+            }
+        });
+
 
         // Keep the existing position selection functions but simplify them
         async function addSegmentAtPositionWithShiftCheck(songId, startTime, endTime, positionMs) {
@@ -983,6 +1098,117 @@
                 modal.remove();
             }
         }
+
+        // Add this to your editor.html script section
+        let currentAudio = null;
+
+        function playPreview(previewUrl, songId) {
+            console.log(`Playing preview for ${songId}:`, previewUrl);
+            
+            if (!previewUrl || previewUrl === '' || previewUrl === null) {
+                showStatus('No preview available for this song', 'warning');
+                return;
+            }
+            
+            // Stop current audio if playing
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio = null;
+                // Reset all play buttons
+                document.querySelectorAll('.play-btn').forEach(btn => {
+                    btn.textContent = '▶️';
+                    btn.classList.remove('playing');
+                });
+            }
+            
+            try {
+                currentAudio = new Audio(previewUrl);
+                currentAudio.volume = 0.5; // Set volume to 50%
+                
+                // Find the play button for this song
+                const playButton = document.querySelector(`[data-song="${songId}"] .play-btn`);
+                
+                currentAudio.addEventListener('loadstart', () => {
+                    showStatus('Loading preview...', 'info');
+                    if (playButton) {
+                        playButton.textContent = '⏳';
+                    }
+                });
+                
+                currentAudio.addEventListener('canplay', () => {
+                    showStatus(`Playing preview: ${songId}`, 'success');
+                    if (playButton) {
+                        playButton.textContent = '⏸️';
+                        playButton.classList.add('playing');
+                    }
+                });
+                
+                currentAudio.addEventListener('ended', () => {
+                    showStatus('Preview ended', 'info');
+                    if (playButton) {
+                        playButton.textContent = '▶️';
+                        playButton.classList.remove('playing');
+                    }
+                    currentAudio = null;
+                });
+                
+                currentAudio.addEventListener('error', (e) => {
+                    console.error('Audio error:', e);
+                    showStatus('Failed to play preview', 'error');
+                    if (playButton) {
+                        playButton.textContent = '❌';
+                        playButton.classList.remove('playing');
+                    }
+                    currentAudio = null;
+                });
+                
+                currentAudio.play().catch(error => {
+                    console.error('Play error:', error);
+                    showStatus('Failed to play preview - try clicking again', 'error');
+                    if (playButton) {
+                        playButton.textContent = '❌';
+                    }
+                });
+                
+            } catch (error) {
+                console.error('Preview error:', error);
+                showStatus('Failed to play preview', 'error');
+            }
+        }
+
+        // Stop preview function
+        function stopPreview() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio = null;
+                
+                // Reset all play buttons
+                document.querySelectorAll('.play-btn').forEach(btn => {
+                    btn.textContent = '▶️';
+                    btn.classList.remove('playing');
+                });
+                
+                showStatus('Preview stopped', 'info');
+            }
+        }
+
+        // Stop preview when leaving page
+        window.addEventListener('beforeunload', () => {
+            if (currentAudio) {
+                currentAudio.pause();
+            }
+        });
+
+        // Add keyboard shortcut to stop preview (spacebar)
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+                e.preventDefault();
+                if (currentAudio && !currentAudio.paused) {
+                    stopPreview();
+                }
+            }
+        });
+
 
 
         // Update selectPosition function
@@ -1050,7 +1276,8 @@
                         ${positions.map(pos => `
                             <div class="option-card" onclick="selectPosition('${songId}', ${startTime}, ${endTime}, ${pos.position_ms})">
                                 <h4>📍 ${pos.description}</h4>
-                                <p>At ${pos.position_seconds.toFixed(1)}s in timeline</p>
+                                <p>At ${pos.position_seconds !== undefined ? pos.position_seconds.toFixed(1) : '0.0'}s in timeline</p>
+
                             </div>
                         `).join('')}
                     </div>
@@ -1131,6 +1358,57 @@
                 showStatus('Playback error: ' + error.message, 'error');
             }
         }
+
+        // In your editor.html
+        async function replaceSegment(segmentId, songId, startTime, endTime) {
+            try {
+                const response = await fetch('/api/editor/replace-segment', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        segment_id: segmentId,
+                        song_id: songId,
+                        start_time: parseFloat(startTime),
+                        end_time: parseFloat(endTime)
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Refresh timeline with validation
+                    refreshTimeline();
+                    showStatus('Segment replaced successfully', 'success');
+                } else {
+                    showStatus('Failed to replace segment: ' + data.error, 'error');
+                }
+                
+            } catch (error) {
+                console.error('Replace segment error:', error);
+                showStatus('Failed to replace segment', 'error');
+            }
+        }
+
+        function refreshTimeline() {
+            // Add null checks when displaying positions
+            fetch('/api/editor/timeline-positions')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.positions) {
+                        data.positions.forEach(pos => {
+                            // Validate position before using toFixed
+                            if (pos.position !== undefined && pos.position !== null) {
+                                const formattedPos = Number(pos.position).toFixed(2);
+                                // Use formattedPos safely
+                            }
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Timeline refresh error:', error);
+                });
+        }
+
 
         function pauseMashup() {
             const audio = document.getElementById('mashupAudio');

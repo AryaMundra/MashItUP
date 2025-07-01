@@ -36,14 +36,14 @@ def get_mashup_status():
     return mashup_status.copy()
 
 class AdvancedSegmentSelector:
-    """Instagram-quality segment selector with perfect musical boundaries"""
+    """-quality segment selector with perfect musical boundaries"""
 
     def __init__(self):
         self.sr = 22050
-        self.max_consecutive_merge = 3
+        self.max_consecutive_merge = 4
 
     def find_enhanced_segments(self, y: np.ndarray, sr: int, duration: float, tempo: float, song_key: str) -> Dict:
-        """Create Instagram-quality segments with perfect start/end points"""
+        """Create -quality segments with perfect start/end points"""
         
         print(f"ðŸŽµ Creating perfect segments for {duration:.1f}s audio...")
         
@@ -240,7 +240,7 @@ class AdvancedSegmentSelector:
         return perfect_segments
 
     def _should_merge_for_perfect_phrase(self, current_segments: List[Dict], next_segment: Dict) -> bool:
-        """Determine if merging creates a perfect musical phrase"""
+        """Enhanced merging logic for complete musical phrases"""
         
         # Check total duration doesn't exceed limit
         total_duration = sum(seg['duration'] for seg in current_segments) + next_segment['duration']
@@ -249,10 +249,13 @@ class AdvancedSegmentSelector:
         
         current_features = current_segments[-1]['features']
         next_features = next_segment['features']
+        current_type = current_segments[-1].get('type', '')
+        next_type = next_segment.get('type', '')
         
         # Musical criteria for merging
         criteria_met = 0
         
+        # EXISTING CRITERIA
         # 1. Natural energy progression
         if current_features['energy'] > next_features['energy'] * 0.8:
             criteria_met += 1
@@ -269,8 +272,117 @@ class AdvancedSegmentSelector:
         if 15 <= total_duration <= 25:
             criteria_met += 1
         
-        # Merge if at least 2 criteria are met
-        return criteria_met >= 2
+        # NEW CRITERIA FOR COMPLETE PHRASES
+        
+        # 5. Musical sentence structure (SRDC pattern)
+        # Check if we're building a complete musical sentence
+        if len(current_segments) == 1:  # Statement + Response pattern
+            if (current_features['harmonic_strength'] > 0.6 and 
+                next_features['harmonic_strength'] > 0.6):
+                criteria_met += 1
+        elif len(current_segments) == 2:  # Adding departure/conclusion
+            if next_features['harmonic_stability'] > 0.7:  # Strong conclusion
+                criteria_met += 1
+        
+        # 6. Cadential completion
+        # Check if next segment provides proper phrase ending
+        spectral_decline = (current_features.get('spectral_centroid', 2500) > 
+                        next_features.get('spectral_centroid', 2500))
+        energy_resolution = next_features['energy'] < current_features['energy'] * 1.1
+        
+        if spectral_decline and energy_resolution:
+            criteria_met += 1
+        
+        # 7. Motivic coherence
+        # Check if segments share similar musical characteristics
+        energy_similarity = abs(current_features['energy'] - next_features['energy']) < 0.3
+        harmonic_coherence = (current_features['harmonic_strength'] > 0.5 and 
+                            next_features['harmonic_strength'] > 0.5)
+        
+        if energy_similarity and harmonic_coherence:
+            criteria_met += 1
+        
+        # 8. Phrase length optimization
+        # Prefer standard phrase lengths (8, 16, 32 beats at ~120 BPM)
+        estimated_beats = total_duration * 2  # Rough beat estimation
+        if estimated_beats in [8, 12, 16, 20, 24, 28, 32]:
+            criteria_met += 1
+        elif 14 <= estimated_beats <= 18 or 30 <= estimated_beats <= 34:
+            criteria_met += 0.5  # Partial credit for close matches
+        
+        # 9. Antecedent-consequent relationship
+        # Check for question-answer phrase structure
+        if len(current_segments) == 1:
+            current_ends_open = current_features['harmonic_stability'] < 0.7
+            next_provides_closure = next_features['harmonic_stability'] > 0.7
+            
+            if current_ends_open and next_provides_closure:
+                criteria_met += 1
+        
+        # 10. Dynamic contour completion
+        # Check for natural dynamic progression
+        dynamic_range_current = current_features.get('dynamic_range', 0.3)
+        dynamic_range_next = next_features.get('dynamic_range', 0.3)
+        
+        # Prefer phrases that build then resolve
+        if (dynamic_range_current > 0.4 and dynamic_range_next < dynamic_range_current):
+            criteria_met += 1
+        
+        # 11. Tonal center stability
+        # Ensure merged phrase maintains tonal coherence
+        if (current_features['harmonic_stability'] > 0.6 and 
+            next_features['harmonic_stability'] > 0.6):
+            criteria_met += 1
+        
+        # 12. Rhythmic phrase completion
+        # Check for rhythmic phrase boundaries (strong-weak pattern)
+        current_rhythm_strength = current_features.get('onset_density', 6)
+        next_rhythm_strength = next_features.get('onset_density', 6)
+        
+        # Strong start, weaker end suggests phrase completion
+        if current_rhythm_strength > 7 and next_rhythm_strength < 6:
+            criteria_met += 1
+        
+        # 13. Melodic arc completion
+        # Check for complete melodic gesture
+        current_spectral = current_features.get('spectral_centroid', 2500)
+        next_spectral = next_features.get('spectral_centroid', 2500)
+        
+        # Rising then falling melodic contour
+        if len(current_segments) >= 2:
+            prev_spectral = current_segments[-2]['features'].get('spectral_centroid', 2500)
+            if prev_spectral < current_spectral > next_spectral:  # Peak in middle
+                criteria_met += 1
+        
+        # 14. Textural consistency
+        # Ensure segments work together texturally
+        perceptual_similarity = abs(current_features.get('perceptual_quality', 0.6) - 
+                                next_features.get('perceptual_quality', 0.6)) < 0.2
+        if perceptual_similarity:
+            criteria_met += 1
+        
+        # 15. Chorus completion bonus
+        # Special handling for chorus segments
+        if current_type == 'chorus' or next_type == 'chorus':
+            if 16 <= total_duration <= 32:  # Ideal chorus length
+                criteria_met += 2  # Double bonus for complete choruses
+        
+        # DECISION LOGIC
+        # More lenient for shorter phrases, stricter for longer ones
+        if total_duration <= 20:
+            required_criteria = 3  # Easier for short phrases
+        elif total_duration <= 30:
+            required_criteria = 4  # Moderate for medium phrases
+        else:
+            required_criteria = 5  # Stricter for long phrases
+        
+        # Log decision for debugging
+        if criteria_met >= required_criteria:
+            print(f"🎼 MERGING: {criteria_met}/{required_criteria} criteria met, duration: {total_duration:.1f}s")
+            return True
+        else:
+            print(f"🎼 NOT merging: only {criteria_met}/{required_criteria} criteria met")
+            return False
 
     def _create_perfect_phrase_segment(self, segments_to_merge: List[Dict], y: np.ndarray, sr: int) -> Dict:
         """Create a perfect musical phrase from multiple segments"""
@@ -421,7 +533,7 @@ class AdvancedSegmentSelector:
             
             # Type-based bonuses
             type_bonus = {
-                'chorus': 0.12,
+                'chorus': 0.25,
                 'verse': 0.08,
                 'bridge': 0.06,
                 'intro': 0.05,
@@ -430,13 +542,13 @@ class AdvancedSegmentSelector:
             
             mashup_score += type_bonus
             
-            # Instagram-quality bonus for perfect characteristics
+            # -quality bonus for perfect characteristics
             if (features['energy'] > 0.4 and features['harmonic_stability'] > 0.7 and 
                 features['onset_density'] > 5 and segment.get('beat_aligned', False)):
-                mashup_score += 0.1  # Instagram-ready bonus
+                mashup_score += 0.1  # -ready bonus
             
             segment['score'] = min(1.0, mashup_score)
-            segment['instagram_ready'] = mashup_score > 0.8
+            segment['_ready'] = mashup_score > 0.8
         
         # Sort by mashup quality
         return sorted(segments, key=lambda x: x['score'], reverse=True)
@@ -492,8 +604,8 @@ class CuePointDetector:
         self,
         sr: int = 44100,
         hop_length: int = 512,
-        novelty_sigma: float = 8.0,          # kernel width (frames) for Foote
-        peak_prominence: float = 0.15,       # relative prominence for peaks
+        novelty_sigma: float = 12.0,          # kernel width (frames) for Foote
+        peak_prominence: float = 0.10,       # relative prominence for peaks
         weights: Tuple[float, float, float] = (0.35, 0.35, 0.30),  # (rms, flux, onset)
         quality_weights: Dict[str, float] = None,                  # bonus weights
         ml_ranker: Optional[object] = None   # e.g. XGBoost regressor (optional)
@@ -760,7 +872,7 @@ class CuePointDetector:
         return beat % beats_per_phrase == 0
 
 class EnhancedMusicalDataExtractor:
-    """Professional music analysis for Instagram-quality mashups"""
+    """Professional music analysis for -quality mashups"""
 
     def __init__(self):
         self.sr = 44100
@@ -871,20 +983,20 @@ class EnhancedMusicalDataExtractor:
             'audio_path': audio_path,
             'full_audio': y,
             'name': os.path.splitext(os.path.basename(audio_path))[0],
-            'instagram_ready': self._assess_instagram_readiness(best_segments, energy_mean, tempo_scalar)
+            '_ready': self._assess_readiness(best_segments, energy_mean, tempo_scalar)
         }
 
-    def _assess_instagram_readiness(self, segments: Dict, energy: float, tempo: float) -> bool:
-        """Assess if song is ready for Instagram-quality mashups"""
+    def _assess_readiness(self, segments: Dict, energy: float, tempo: float) -> bool:
+        """Assess if song is ready for -quality mashups"""
         
         best_segments = segments.get('best_overall', [])
         if not best_segments:
             return False
         
-        # Check for Instagram-ready segments
-        instagram_segments = [s for s in best_segments if s.get('instagram_ready', False)]
+        # Check for -ready segments
+        _segments = [s for s in best_segments if s.get('_ready', False)]
         
-        return (len(instagram_segments) >= 2 and energy > 0.2 and 90 <= tempo <= 150)
+        return (len(_segments) >= 2 and energy > 0.2 and 90 <= tempo <= 150)
 
     def _create_emergency_segments(self, y: np.ndarray, sr: int, duration: float) -> Dict:
         """Create emergency segments when normal analysis fails"""
@@ -949,7 +1061,7 @@ class EnhancedMusicalDataExtractor:
             'audio_path': audio_path,
             'full_audio': np.zeros(int(duration * self.sr)),
             'name': os.path.splitext(os.path.basename(audio_path))[0],
-            'instagram_ready': False
+            '_ready': False
         }
 
     def _get_key_profiles(self) -> Dict[str, np.ndarray]:
@@ -999,16 +1111,16 @@ class EnhancedMusicalDataExtractor:
         print(f"ðŸŽµ Successfully analyzed {len(songs_data)} songs")
         return songs_data
 
-class InstagramQualityTimelineBuilder:
-    """Build Instagram-quality timelines with perfect flow"""
+class QualityTimelineBuilder:
+    """Build -quality timelines with perfect flow"""
 
     def __init__(self, config):
         self.config = config
 
     def build_perfect_timeline(self, songs_data: List[Dict], target_duration: float) -> 'Timeline':
-        """Build timeline optimized for Instagram-quality mashups"""
+        """Build timeline optimized for -quality mashups"""
         
-        print(f"ðŸŽ¼ Building Instagram-quality timeline for {target_duration:.1f}s...")
+        print(f"ðŸŽ¼ Building -quality timeline for {target_duration:.1f}s...")
         
         # Collect all segments
         all_segments = self._collect_all_segments(songs_data)
@@ -1020,8 +1132,8 @@ class InstagramQualityTimelineBuilder:
         # Build timeline ensuring all songs are represented
         timeline = self._build_balanced_timeline(all_segments, target_duration)
         
-        # Apply Instagram-quality enhancements
-        timeline = self._apply_instagram_enhancements(timeline)
+        # Apply -quality enhancements
+        timeline = self._apply_enhancements(timeline)
         
         print(f"âœ¨ Created perfect timeline with {len(timeline.segments)} segments")
         return timeline
@@ -1074,18 +1186,18 @@ class InstagramQualityTimelineBuilder:
         return timeline
 
 
-    def _apply_instagram_enhancements(self, timeline: 'Timeline') -> 'Timeline':
-        """Apply Instagram-quality enhancements"""
+    def _apply_enhancements(self, timeline: 'Timeline') -> 'Timeline':
+        """Apply -quality enhancements"""
         
         if len(timeline.segments) < 2:
             return timeline
         
-        print("âœ¨ Applying Instagram-quality enhancements...")
+        print("âœ¨ Applying -quality enhancements...")
         
         # Enhance segments for perfect flow
         for i, segment in enumerate(timeline.segments):
             # Add perfect transition markers
-            segment['instagram_enhanced'] = True
+            segment['_enhanced'] = True
             segment['transition_ready'] = True
             
             # Calculate optimal crossfade duration based on segment characteristics
@@ -1098,7 +1210,7 @@ class InstagramQualityTimelineBuilder:
         return timeline
 
 class Timeline:
-    """Professional timeline for Instagram-quality mashups"""
+    """Professional timeline for -quality mashups"""
 
     def __init__(self, target_duration: float = 180.0):
         self.target_duration = target_duration
@@ -1111,20 +1223,40 @@ class Timeline:
     def get_total_duration(self) -> float:
         """Get total duration"""
         return sum(seg['duration'] for seg in self.segments)
+    def get_structure_info(self) -> dict:
+        """Get structure information for metadata"""
+        if not self.segments:
+            return {"total_segments": 0, "structure": "empty"}
+        
+        structure_info = {
+            "total_segments": len(self.segments),
+            "total_duration": self.get_total_duration(),
+            "segments_by_type": {},
+            "average_segment_duration": self.get_total_duration() / len(self.segments),
+            "songs_used": list(set(seg.get('song_name', 'Unknown') for seg in self.segments))
+        }
+        
+        # Count segments by type
+        for segment in self.segments:
+            seg_type = segment.get('type', 'unknown')
+            structure_info["segments_by_type"][seg_type] = structure_info["segments_by_type"].get(seg_type, 0) + 1
+        
+        return structure_info
 
-class InstagramQualityAudioProcessor:
-    """Process audio for Instagram-quality output"""
+
+class QualityAudioProcessor:
+    """Process audio for -quality output"""
 
     def __init__(self, config):
         self.config = config
 
-    def assemble_instagram_mashup(self, timeline: Timeline) -> np.ndarray:
-        """Assemble mashup with Instagram-quality processing"""
+    def assemble_mashup(self, timeline: Timeline) -> np.ndarray:
+        """Assemble mashup with -quality processing"""
         
         if not timeline.segments:
             return np.array([])
         
-        print("ðŸŽµ Assembling Instagram-quality mashup...")
+        print("ðŸŽµ Assembling -quality mashup...")
         
         # Start with first segment
         result_audio = timeline.segments[0]['audio'].copy()
@@ -1133,8 +1265,8 @@ class InstagramQualityAudioProcessor:
         for i in range(1, len(timeline.segments)):
             current_segment = timeline.segments[i]
             
-            # Apply Instagram-quality crossfade
-            result_audio = self._apply_instagram_crossfade(
+            # Apply -quality crossfade
+            result_audio = self._apply_crossfade(
                 result_audio, 
                 current_segment['audio'],
                 current_segment.get('optimal_crossfade', 1.2)
@@ -1142,15 +1274,15 @@ class InstagramQualityAudioProcessor:
             
             print(f"âœ¨ Added {current_segment.get('song_name', 'Unknown')} with perfect crossfade")
         
-        # Apply final Instagram processing
-        result_audio = self._apply_instagram_mastering(result_audio)
+        # Apply final  processing
+        result_audio = self._apply_mastering(result_audio)
         
         duration = len(result_audio) / self.config.sample_rate
-        print(f"ðŸŽ‰ Instagram-quality mashup completed: {duration:.1f}s")
+        print(f"ðŸŽ‰ -quality mashup completed: {duration:.1f}s")
         
         return result_audio
 
-    def _apply_instagram_crossfade(self, main_audio: np.ndarray, new_audio: np.ndarray, 
+    def _apply_crossfade(self, main_audio: np.ndarray, new_audio: np.ndarray, 
                               crossfade_duration: float) -> np.ndarray:
         """Apply crossfade using cue point information for perfect transitions"""
         
@@ -1183,8 +1315,8 @@ class InstagramQualityAudioProcessor:
         return result
 
 
-    def _apply_instagram_mastering(self, audio: np.ndarray) -> np.ndarray:
-        """Apply Instagram-optimized mastering"""
+    def _apply_mastering(self, audio: np.ndarray) -> np.ndarray:
+        """Apply -optimized mastering"""
         
         # Gentle compression for consistent loudness
         compressed = np.tanh(audio * 1.1)
@@ -1200,25 +1332,25 @@ class InstagramQualityAudioProcessor:
 
 @dataclass
 class MashupConfig:
-    """Configuration for Instagram-quality mashups"""
+    """Configuration for  mashups"""
     
     sample_rate: int = 44100
     bit_depth: int = 24
     crossfade_duration: float = 1.2
-    target_loudness: float = -14.0  # LUFS for social media
-    enable_instagram_optimization: bool = True
+    target_loudness: float = -14.0  
+    enable_optimization: bool = True
 
-class InstagramMashupGenerator:
-    """Main generator for Instagram-quality mashups"""
+class MashupGenerator:
+    """Main generator for -quality mashups"""
 
     def __init__(self, config: Optional[MashupConfig] = None):
         self.config = config or MashupConfig()
         self.audio_analyzer = EnhancedMusicalDataExtractor()
-        self.timeline_builder = InstagramQualityTimelineBuilder(self.config)
-        self.audio_processor = InstagramQualityAudioProcessor(self.config)
+        self.timeline_builder = QualityTimelineBuilder(self.config)
+        self.audio_processor = QualityAudioProcessor(self.config)
 
-    def create_instagram_mashup(self, demo_folder: str, target_duration: float = 180.0) -> Optional[str]:
-        """Create Instagram-quality mashup"""
+    def create_mashup(self, demo_folder: str, target_duration: float = 180.0):
+        """Create -quality mashup"""
         
         try:
             # Find audio files
@@ -1243,21 +1375,21 @@ class InstagramMashupGenerator:
                 print("âŒ No segments available for mashup")
                 return None
             
-            # Assemble Instagram-quality mashup
-            mashup_audio = self.audio_processor.assemble_instagram_mashup(timeline)
+            # Assemble -quality mashup
+            mashup_audio = self.audio_processor.assemble_mashup(timeline)
             if len(mashup_audio) == 0:
                 print("âŒ Failed to assemble mashup")
                 return None
             
-            # Export with Instagram optimization
+            # Export with  optimization
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = f"instagram_mashup_{timestamp}.wav"
+            output_filename = f"_mashup_{timestamp}.wav"
             output_path = os.path.join('Final_Mashup', output_filename)
             
             sf.write(output_path, mashup_audio, self.config.sample_rate, subtype='PCM_24')
             
             duration = len(mashup_audio) / self.config.sample_rate
-            print(f"ðŸŽ‰ Instagram-quality mashup created: {output_filename} ({duration:.1f}s)")
+            print(f"ðŸŽ‰ -quality mashup created: {output_filename} ({duration:.1f}s)")
             print(f"âœ¨ Ready for social media upload!")
             
             metadata = self._generate_metadata(timeline)
@@ -1267,7 +1399,7 @@ class InstagramMashupGenerator:
             with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
             
-            return output_path
+            return output_path,metadata_file
         
         except:
             return None
@@ -1318,30 +1450,47 @@ class InstagramMashupGenerator:
         
         return sorted(audio_files)
 
-# Main function for easy use
-def create_mashup(demo_folder='downloaded_music', target_duration=180.0, include_background=False):
+def create_mashup(demo_folder='downloaded_music', target_duration=180.0, include_background=False, session_folder=None):
     """
-    Wrapper function to maintain compatibility with existing Flask app.py
-    This function signature matches what app.py expects.
+    Wrapper function to create mashup and save in user session folder
     """
     try:
-        # Use your new Instagram mashup generator
         config = MashupConfig()
-        generator = InstagramMashupGenerator(config)
+        generator = MashupGenerator(config)
         
         # Create the mashup using your new system
-        result_path = generator.create_instagram_mashup(demo_folder, target_duration)
+        result_path,metadata_path = generator.create_mashup(demo_folder, target_duration)
         
-        if result_path:
+        if result_path and os.path.exists(result_path):
+            # Save to session folder instead of Final_Mashup
+            if session_folder is None:
+                raise ValueError('session_folder must be provided for session-based storage')
+            
+            # Ensure session mashup folder exists
+            session_mashup_folder = os.path.join(session_folder, 'mashup')
+            os.makedirs(session_mashup_folder, exist_ok=True)
+            
+            # Move file to session folder
+            final_path = os.path.join(session_mashup_folder, os.path.basename(result_path))
+            final_metadata_path = os.path.join(session_mashup_folder, os.path.basename(metadata_path))
+            shutil.move(result_path, final_path)  # Use move instead of copy
+            shutil.move(metadata_path, final_metadata_path)  # Use move instead of copy
+            
+            print(f"✅ Mashup saved to session: {final_path}")
+            
             # Return tuple format that app.py expects: (mashup_file, background_file)
-            return result_path, None
+            return final_path, None
         else:
-            print("❌ Failed to create mashup")
+            print(f"❌ Mashup creation failed")
             return None, None
             
     except Exception as e:
         print(f"❌ Mashup creation error: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
+
+
 
 # Also add this for backward compatibility
 def cleanup_temp_files():
@@ -1359,6 +1508,6 @@ if __name__ == "__main__":
     )
     
     if mashup_file:
-        print(f"ðŸŽµ Your Instagram-ready mashup: {mashup_file}")
+        print(f"ðŸŽµ Your -ready mashup: {mashup_file}")
     else:
         print("ðŸ˜ž Mashup creation failed")

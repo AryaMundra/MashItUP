@@ -32,40 +32,27 @@ class IsolatedMashupHandler:
                 if not download_result['success']:
                     raise Exception(f"Download failed: {download_result.get('error', 'Unknown error')}")
             
-            # Create mashup using session's folders
+            # Create mashup using session's folders - PASS SESSION FOLDER
             mashup_file, background_file = mashup.create_mashup(
                 demo_folder=session_data['music_folder'],
                 target_duration=target_duration,
-                include_background=False
+                include_background=False,
+                session_folder=session_data['session_folder']  # Pass session folder
             )
             
             if mashup_file:
-                # Move mashup to session's mashup folder
-                session_mashup_file = os.path.join(
-                    session_data['mashup_folder'], 
-                    os.path.basename(mashup_file)
-                )
-                
-                # Copy to session folder
-                shutil.copy2(mashup_file, session_mashup_file)
-                
-                # Also copy to Final_Mashup for global access
-                global_mashup_file = os.path.join('Final_Mashup', os.path.basename(mashup_file))
-                shutil.copy2(mashup_file, global_mashup_file)
-                
-                # Update session
+                # Update session with the mashup file path
                 session_manager.update_session_status(
                     session_id,
                     'completed',
-                    mashup_file=session_mashup_file,
-                    global_mashup_file=global_mashup_file
+                    mashup_file=mashup_file
                 )
                 
                 logger.info(f"Mashup created successfully for session {session_id}")
                 
                 return {
                     'success': True,
-                    'mashup_file': global_mashup_file,
+                    'mashup_file': mashup_file,
                     'session_id': session_id
                 }
             else:
@@ -80,6 +67,7 @@ class IsolatedMashupHandler:
             # Remove from active mashups
             if session_id in self.active_mashups:
                 del self.active_mashups[session_id]
+
 
 # Global mashup handler instance
 mashup_handler = IsolatedMashupHandler()

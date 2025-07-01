@@ -276,6 +276,36 @@
             }
         }
 
+        async function pollProgress() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                updateProgress(data.progress, data.message);
+                
+                if (data.status === 'completed') {
+                    updateProgress(100, 'Mashup created successfully!');
+                    
+                    setTimeout(() => {
+                        hideLoading();
+                        // Redirect to results page
+                        window.location.href = '/results';
+                    }, 2000);
+                } else if (data.status === 'error') {
+                    hideLoading();
+                    showStatus('Error: ' + data.message, 'error');
+                } else if (data.status === 'processing') {
+                    setTimeout(pollProgress, 1000);
+                }
+                
+            } catch (error) {
+                console.error('Progress poll error:', error);
+                hideLoading();
+                showStatus('Failed to check progress', 'error');
+            }
+        }
+
+
         function updateSelectedSongs() {
             const container = document.getElementById('selectedSongs');
             const section = document.getElementById('selectedSection');

@@ -1,23 +1,24 @@
 # Core Audio Processing
 librosa
+resampy
 soundfile>=0.12.1
 numpy>=1.24.0
 scipy>=1.10.0
 matplotlib
 pydub
-pyaudio
+
 
 
 # Async Processing
 nest-asyncio
-asyncio
+
 
 
 
 # Data Handling
 dataclasses
 typing-extensions>=4.5.0
-dotenv
+
 python-dotenv
 
 
